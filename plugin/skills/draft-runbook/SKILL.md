@@ -29,28 +29,18 @@ service name. Pass `include_stale: true` both times, so you also see excluded pa
 
 The owner is a team, never a person. Read the service page with the `read` tool (for
 example `svc-<service>`) and use its `owner_team`. If several teams are plausible, ask
-the user. Then confirm that CODEOWNERS assigns that team to the target path. That path is
-normally `knowledge/runbooks/<slug>.md`, or `knowledge/runbooks/<team>-<slug>.md` where
-CODEOWNERS routes by prefix.
+the user. You don't pick the file name: `draft_page` names the page and places it where
+CODEOWNERS gives it to that team, as `<team>-<slug>` where CODEOWNERS routes runbooks by
+prefix.
 
-## 4. Write the page
+## 4. Write the body
 
-Use this shape exactly. `docsworth lint` enforces the frontmatter, and the skills compiler
-needs all four sections.
+`draft_page` writes the frontmatter itself (`status: draft`, the owner, today's
+`last_verified`, `review_every: 90d`), so write only the markdown after it, in this
+shape. The skills compiler needs all four sections.
 
 ```markdown
----
-title: <Imperative title, e.g. Drain the webhook backlog>
-id: rb-<slug>
-type: runbook
-status: draft
-owner_team: <team slug>
-last_verified: <today, YYYY-MM-DD>
-review_every: 90d
-applies_to: [service:<name>]
-description: <one sentence: what this procedure does>
----
-# <Title>
+# <Imperative title, e.g. Drain the webhook backlog>
 
 ## When to use
 - <the alert, symptom or request that triggers this>
@@ -65,19 +55,21 @@ description: <one sentence: what this procedure does>
 - <how to undo it, or why it cannot be undone>
 ```
 
-Always use `status: draft`. The owning team promotes it to `canonical` in review.
+## 5. Open the draft PR with `draft_page`
 
-## 5. Open a draft PR
+Call the Docsworth `draft_page` tool. Don't use git or `gh` for this: the tool opens the
+PR from its own `docsworth/draft/` branch and never writes to the default branch.
 
-The knowledge repo is the directory in `DOCSWORTH_KNOWLEDGE_DIR`, or the current project if
-that isn't set. Work on a new branch and never commit to the default branch:
+- `type`: `runbook`
+- `title`: the imperative title
+- `owner_team`: the team from step 3
+- `description`: one sentence, what this procedure does
+- `body`: the markdown from step 4
+- `source_url`: the incident document's link, if the user gave one
+- `reason`: the incident it comes from, every `TODO(owner):` you left, and the service
+  it applies to (`applies_to: [service:<name>]`), which the owners add in review
 
-1. `git switch -c docsworth/draft/<id>`
-2. Write the file.
-3. Run `docsworth lint .` and fix every
-   error. Overdue warnings on other pages are fine.
-4. `git add <file> && git commit -m "docs(<id>): draft runbook from <incident>"`
-5. `git push -u origin docsworth/draft/<id>`
-6. `gh pr create --draft --title "Draft runbook: <title>" --body "<source and open TODOs>"`
+If it refuses because CODEOWNERS gives the directory to another team, tell the user what
+it said and ask which directory the team owns; pass that as `dir` and call it again.
 
-Report the PR URL and list every `TODO(owner):` you left.
+Report the PR URL and the page's path, and list every `TODO(owner):` you left.

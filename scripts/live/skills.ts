@@ -1,5 +1,5 @@
 // R22: one headless Claude Code scenario per plugin skill, against the scratch repo.
-//   draft-runbook          → opens a draft PR on a docsworth/draft/ branch with a new runbook
+//   draft-runbook          → calls draft_page: a draft PR on a docsworth/draft/ branch with a new runbook
 //   update-after-incident  → calls propose_edit on the affected runbook → PR
 //   verify-page            → calls verify; the scratch account is on no @acme team, so the
 //                            expected outcome is the owner refusal, reported to the user
@@ -37,11 +37,7 @@ if (existing.length) console.log(`WARN  ${existing.length} docsworth/ branch(es)
 const dir = mkdtempSync(join(tmpdir(), "docsworth-skills-"));
 try {
   execFileSync("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "clone", "-q", `https://github.com/${repo}.git`, dir]);
-  // Repo-local only: the skill's own `git push` uses the same identity as the token.
-  execFileSync("git", ["-C", dir, "config", "--local", "--add", "credential.helper", ""]);
-  execFileSync("git", ["-C", dir, "config", "--local", "--add", "credential.helper", "!gh auth git-credential"]);
-  execFileSync("git", ["-C", dir, "config", "--local", "user.name", "Docsworth live test"]);
-  execFileSync("git", ["-C", dir, "config", "--local", "user.email", "docsworth@users.noreply.github.com"]);
+  // Every scenario writes through the MCP tools, which open PRs with GITHUB_TOKEN: no git push.
   const env = { GITHUB_TOKEN: token };
   const only = (process.env.SCENARIOS ?? "draft,update,verify").split(",");
   const report = (name: string, r: { subtype: string; seconds: number; denials: { tool_name: string; tool_input: unknown }[]; toolCalls: { name: string; input: Record<string, unknown> }[] }) => {
@@ -58,7 +54,7 @@ try {
       "",
       "INC-77, 2026-10-29, SEV2. KafkaConsumerLag fired for the payments-events consumer group for 25 minutes. Responders ran `kafkactl describe group payments-consumers` and saw partition 7 stuck on a poison message at offset 88121. They moved it to the dead-letter topic with `kafkactl dlq move payments-events 7 88121` and lag cleared within 6 minutes. They had also scaled the consumer with `kubectl -n payments scale deploy/payments-consumer --replicas=12`, and scaled it back to 6 an hour later. Checks used: `kafkactl describe group payments-consumers` shows lag under 1000 on every partition. The payments team owns the consumer.",
     ].join("\n"),
-    { env, allowedTools: [...READ_TOOLS, "Read", "Write", "Edit", "Bash(git *)", "Bash(gh pr create *)", "Bash(docsworth *)", "Bash(ls *)", "Bash(cat *)"] },
+    { env, allowedTools: [...READ_TOOLS, TOOL("draft_page")] },
   );
   const newDraft = prs().find((p) => !before.has(p.number) && p.headRefName.startsWith("docsworth/draft/"));
   check("draft-runbook opened a draft PR on a docsworth/draft/ branch", Boolean(newDraft?.isDraft), newDraft ? `#${newDraft.number} ${newDraft.headRefName}` : draft.result.slice(-300));

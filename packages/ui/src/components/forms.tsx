@@ -110,7 +110,7 @@ export function CaptureForm(props: { caps: Capabilities | null; teams: string[];
             ))}
           </select>
         </Field>
-        <Field label="Owning team" hint="CODEOWNERS must give it the directory">
+        <Field label="Owning team" hint="CODEOWNERS must give it the directory, or <team>- names in it">
           <select value={v.owner_team} onChange={set("owner_team")}>
             {teams.map((t) => (
               <option value={t} key={t}>

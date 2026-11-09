@@ -9,6 +9,7 @@ import { GitHubClient } from "../src/core/github.js";
 import { IdentityProvider, LOCAL_IDENTITY } from "../src/core/identity.js";
 import { auditTransport } from "../src/core/mcp/audit-transport.js";
 import { createMcpServer } from "../src/core/mcp/server.js";
+import { lintRepo } from "../src/core/lint.js";
 import { buildNewPage } from "../src/core/new-page.js";
 import { isPage, loadRepo, parsePage } from "../src/core/repo.js";
 import { KnowledgeService, ToolError } from "../src/core/service.js";
@@ -25,6 +26,7 @@ beforeEach(() => {
     {
       alice: { login: "alice", teams: ["platform"], push: true },
       pat: { login: "pat", teams: ["payments"], push: true },
+      riley: { login: "riley", teams: ["sre"], push: true },
       sam: { login: "sam", teams: ["security"], push: true },
       viewer: { login: "viewer", teams: ["platform"], push: false },
     },
@@ -70,6 +72,36 @@ describe("draft_page: a new page as a draft PR (R8)", () => {
   it("follows CODEOWNERS rules on file names: a payments runbook lands where payments owns", async () => {
     const r = await service("pat").draftPage({ ...DRAFT, title: "Payments refund delay", owner_team: "payments" });
     expect(r.path).toMatch(/^knowledge\/runbooks\/payments-refund-delay-[0-9a-f]{12}\.md$/);
+  });
+
+  describe("CODEOWNERS prefix routing: a `<team>-` name where the directory is another team's", () => {
+    it.each([
+      ["pat", "payments"],
+      ["riley", "sre"],
+    ])("%s drafts a %s runbook into runbooks/, named so CODEOWNERS gives it to that team, and it lints there", async (token, team) => {
+      const r = await service(token).draftPage({ ...DRAFT, owner_team: team });
+      expect(r.id).toMatch(new RegExp(`^rb-${team}-drain-a-kafka-partition-[0-9a-f]{12}$`));
+      expect(r.path).toBe(`knowledge/runbooks/${r.id.slice(3)}.md`);
+      expect(gh.file(r.path)).toBeUndefined();
+      expect(gh.pulls[0]).toMatchObject({ head: r.branch, base: "main", draft: true });
+      // The file from the PR branch, written into the repo, lints clean where it landed.
+      writeFileSync(join(acme.root, r.path), gh.file(r.path, r.branch)!);
+      const repo = loadRepo(acme.root);
+      expect(repo.byId.get(r.id)).toMatchObject({ owner_team: team, status: "draft" });
+      expect(lintRepo(repo, NOW).diagnostics.filter((d) => d.path === r.path && d.severity === "error")).toEqual([]);
+    });
+
+    it("keeps the plain name where it already works: no prefix for the directory's own team or a title that starts with the team", async () => {
+      expect((await service("alice").draftPage(DRAFT)).path).toMatch(/^knowledge\/runbooks\/drain-a-kafka-partition-[0-9a-f]{12}\.md$/);
+      expect((await service("pat").draftPage({ ...DRAFT, title: "Payments: drain a partition", owner_team: "payments" })).path).toMatch(/^knowledge\/runbooks\/payments-drain-a-partition-[0-9a-f]{12}\.md$/);
+    });
+
+    it("retries a taken `<team>-` name with a fresh one, and never names it", async () => {
+      writeFileSync(join(acme.root, "knowledge/runbooks/payments-drain-a-kafka-partition-aaaaaaaaaaaa.md"), readFileSync(join(acme.root, "knowledge/runbooks/flush-cdn-cache.md"), "utf8").replace("id: rb-flush-cdn", "id: rb-other"));
+      const s = suffixes(service("pat"), "aaaaaaaaaaaa", "bbbbbbbbbbbb");
+      const r = await s.draftPage({ ...DRAFT, owner_team: "payments" });
+      expect(r.id).toBe("rb-payments-drain-a-kafka-partition-bbbbbbbbbbbb");
+    });
   });
 
   it("notes where the content came from, as an autolink", async () => {
@@ -126,9 +158,9 @@ describe("draft_page: a new page as a draft PR (R8)", () => {
       expect(await rejection(service("viewer").draftPage(DRAFT))).toMatchObject({ code: "forbidden", message: "your token has no push access to acme/knowledge" });
     });
 
-    it("when CODEOWNERS gives the directory to another team, naming the directory, not the page", async () => {
-      const e = await rejection(service("pat").draftPage({ ...DRAFT, owner_team: "payments" }));
-      expect(e).toMatchObject({ code: "invalid", message: "CODEOWNERS assigns @acme/platform there (knowledge/runbooks/); give a `dir` that @acme/payments owns" });
+    it("when CODEOWNERS gives the directory to another team and routes no `<team>-` names there, naming the directory and the prefix, not the page", async () => {
+      const e = await rejection(service("sam").draftPage({ ...DRAFT, owner_team: "security" }));
+      expect(e).toMatchObject({ code: "invalid", message: "CODEOWNERS assigns @acme/platform there (knowledge/runbooks/) and doesn't give @acme/security `knowledge/runbooks/security-*`; give a `dir` that @acme/security owns" });
       expect(gh.pulls).toHaveLength(0);
     });
 

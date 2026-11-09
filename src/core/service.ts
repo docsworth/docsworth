@@ -810,32 +810,43 @@ export class KnowledgeService {
     const today = formatDate(utcToday(this.now()));
     const slug = slugify(args.title).slice(0, 40).replace(/-+$/, "") || "page";
     const body = `${source ? `> Captured from <${source}> on ${today}. Review it before merging.\n\n` : ""}${args.body.replace(/\s*$/, "")}\n`;
+    // Where CODEOWNERS routes by file name (`runbooks/payments-*`), a name the directory's
+    // own rule gives to another team is tried again as `<owner_team>-<slug>-<hex>`. Still
+    // server-named, and the owner check in buildNewPage decides, as for the plain name.
+    const teamPrefix = slugify(args.owner_team);
     for (let attempt = 0; attempt < DRAFT_NAME_ATTEMPTS; attempt++) {
       const suffix = this.draftSuffix();
-      const built = buildNewPage(repo, {
-        type: args.type,
-        title: args.title,
-        id: `${NEW_PAGE_PREFIX[args.type]}-${slug}-${suffix}`,
-        slug: `${slug}-${suffix}`,
-        ownerTeam: args.owner_team,
-        status: "draft",
-        dir: args.dir,
-        acl,
-        description: args.description,
-        body,
-        now: this.now(),
-      });
+      const build = (stem: string) =>
+        buildNewPage(repo, {
+          type: args.type,
+          title: args.title,
+          id: `${NEW_PAGE_PREFIX[args.type]}-${stem}`,
+          slug: stem,
+          ownerTeam: args.owner_team,
+          status: "draft",
+          dir: args.dir,
+          acl,
+          description: args.description,
+          body,
+          now: this.now(),
+        });
+      const plain = build(`${slug}-${suffix}`);
+      const mismatch = !plain.ok && plain.problem.kind === "owner_mismatch" ? plain.problem : null;
+      const built = mismatch ? build(`${teamPrefix}-${slug}-${suffix}`) : plain;
       if (!built.ok) {
         const p = built.problem;
         // A name already in use: pick another, and never say which.
         if (p.kind === "id_taken" || p.kind === "path_taken") continue;
         if (p.kind === "bad_dir") throw new ToolError("invalid", `\`dir\` must be a relative path under ${repo.config.knowledge_root}/ without . or .. segments`);
         if (p.kind === "owner_mismatch") {
-          // The directory the page would go in (a service gets its own directory under it).
-          const where = args.type === "service" && args.dir === undefined ? posix.dirname(posix.dirname(p.path)) : posix.dirname(p.path);
+          // Name the directory the page would go in (a service gets its own directory under
+          // it), the team its rule gives it to, and the prefix that was tried there.
+          const { assigned, path } = mismatch ?? p;
+          const where = args.type === "service" && args.dir === undefined ? posix.dirname(posix.dirname(path)) : posix.dirname(path);
+          const org = repo.config.github.org;
           throw new ToolError(
             "invalid",
-            `CODEOWNERS ${p.assigned ? `assigns @${repo.config.github.org}/${p.assigned}` : "assigns no single team"} there (${where}/); give a \`dir\` that @${repo.config.github.org}/${args.owner_team} owns`,
+            `CODEOWNERS ${assigned ? `assigns @${org}/${assigned}` : "assigns no single team"} there (${where}/) and doesn't give @${org}/${args.owner_team} \`${where}/${teamPrefix}-*\`; give a \`dir\` that @${org}/${args.owner_team} owns`,
           );
         }
         throw new ToolError("invalid", p.kind === "invalid" ? `the page would not lint: ${p.issues.join("; ")}` : "ADRs are written by hand");

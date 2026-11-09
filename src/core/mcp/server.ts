@@ -181,7 +181,7 @@ export function createMcpServer(
     {
       title: "Draft a new page (opens a PR)",
       description:
-        "Create a new knowledge page as a draft pull request for its owning team to review. Never writes to the default branch. The page is `status: draft`, so it can't be cited until its owners make it canonical. The server picks its id and file name from the title. CODEOWNERS must assign `owner_team` where it lands: by default the type's directory (runbooks/, services/, guides/, policies/), or `dir`.",
+        "Create a new knowledge page as a draft pull request for its owning team to review. Never writes to the default branch. The page is `status: draft`, so it can't be cited until its owners make it canonical. The server picks its id and file name from the title. CODEOWNERS must assign `owner_team` where it lands: the type's directory (runbooks/, services/, guides/, policies/) or `dir`, or, where CODEOWNERS routes that directory by file name (`runbooks/payments-*`), a name starting `<owner_team>-`, which the server tries when the plain name is another team's.",
       inputSchema: {
         type: z.enum(["runbook", "service", "guide", "policy"]).describe("The page type; ADRs are written by hand"),
         title: z.string().min(1).describe("One line"),

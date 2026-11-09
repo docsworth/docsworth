@@ -200,8 +200,11 @@ so nothing written from the redacted view goes back into it.
   then say it is there. Owners can rename it in the PR before merging.
 - **Where it lands.** The type's directory (`runbooks/`, `services/<name>/index.md`,
   `guides/`, `policies/`) or a `dir` under the knowledge root. CODEOWNERS must assign
-  `owner_team` there, so the page lints; rules on file names (`runbooks/payments-*`)
-  follow the title. ADRs are written by hand.
+  `owner_team` there, so the page lints. Where the plain name is another team's, the
+  server tries `<owner_team>-<slug>-<12 hex>` (id `<prefix>-<owner_team>-<slug>-<12 hex>`)
+  in the same directory, so rules on file names (`runbooks/payments-*`) route the page to
+  its team; if that isn't the team's either, `draft_page` refuses and names the directory.
+  ADRs are written by hand.
 - **What it holds.** `status: draft` (never citable until its owners make it canonical),
   `last_verified` today, `review_every: 90d`, the caller's one-line title and optional
   description, and `acl` `internal` or a team the caller is on. A `source_url` becomes a

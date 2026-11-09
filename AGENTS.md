@@ -9,7 +9,7 @@ and it must never write to a default branch.
 
 | What | Command | Healthy output |
 |---|---|---|
-| Verify | `npm test` | core (`test:core`): `tsc --noEmit` silent, `Test Files 34 passed`, `Tests 1086 passed`; then the web app (`test:web`): the typecheck and tests of `packages/ui` (`Tests 37 passed`), `packages/web` (`Tests 12 passed`; the view tests drive the real `serve` CLI), and `packages/extension` (`Test Files 8 passed`, `Tests 59 passed`; its panel tests drive the real `serve` CLI too, and `chrome.e2e.test.ts` drives a real Chrome: `CHROME_PATH` or the usual install paths, skipped with a warning without one, a failure in CI); exit 0. Core's suite builds, packs and installs the real tarball (`test/package.test.ts`) |
+| Verify | `npm test` | core (`test:core`): `tsc --noEmit` silent, `Test Files 34 passed`, `Tests 1090 passed`; then the web app (`test:web`): the typecheck and tests of `packages/ui` (`Tests 37 passed`), `packages/web` (`Tests 12 passed`; the view tests drive the real `serve` CLI), and `packages/extension` (`Test Files 8 passed`, `Tests 77 passed`; its panel tests drive the real `serve` CLI too, and `chrome.e2e.test.ts` drives a real Chrome: `CHROME_PATH` or the usual install paths, skipped with a warning without one, a failure in CI); exit 0. Core's suite builds, packs and installs the real tarball (`test/package.test.ts`) |
 | Polish fuzz (long) | `npx tsx scripts/fuzz-polish.ts --iterations 60000 --seed 1 --depth 6 --edits 3` | `60000 pairs, seed 1, depth 6, edits 3, ~9 s: 0 miss(es)`, exit 0. A miss prints the shrunk pair: a change commonmark.js renders that the polish guard didn't report |
 | ACL fuzz (long) | `npx tsx scripts/fuzz-acl.ts --iterations 4000 --seed 1 --seeds 30 --show 0` | `120000 texts, seeds 1–30, ~20 s: 31570 reach a hidden page, 0 leak(s) after redaction; 166 of 58699 reaching only visible pages redacted`, exit 0. A leak prints the text and how it still reaches the page |
 | Clean install | `npm run build && npm pack && npx tsx scripts/smoke-install.ts ./<one>.tgz` | eight `PASS` lines (bin, nothing of pro, init lints clean, seven tools, the polish prompt, a citable hit, `serve` serving the web app, `/mcp` answering the token only), then `clean install: all checks passed`, exit 0. CI runs it on every PR |
@@ -27,6 +27,8 @@ seen it pass.
 
 ## Conventions
 
+- **Commits by an agent for the maintainer:** the maintainer's GitHub noreply address, never
+  another account's email: GitHub credits a commit to whichever account holds its email.
 - **Language:** TypeScript strict on Node ≥ 22.12, ESM, `module: NodeNext`. Relative
   imports carry `.js`.
 - **Dependencies:** use npm (`npm install <pkg>`). Prefer a small `fetch` wrapper over a
