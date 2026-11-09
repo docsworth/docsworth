@@ -1,0 +1,30 @@
+# Held-out gate questions: same rules as questions-gate.yaml. Written 2026-11-03, before
+# any gate run. Scored, never read while tuning:
+# compare reports only counts for held-out.
+- id: dh01
+  question: Pods have been Pending for 15 minutes because of insufficient capacity. What should I do?
+  excluded: [rb-scale-cluster]
+  relay: [prod_pool_max, infra/clusters/prod, terraform apply, node pool maximum]
+- id: dh02
+  question: How many shadow shifts do I need before taking on-call alone?
+  excluded: [onb-on-call]
+  relay: [shadow two, two full primary shifts, lms, ask your manager]
+  relay_variants: [two shadow]
+- id: dh03
+  question: What is the deadline for submitting chargeback evidence?
+  excluded: [rb-payments-chargeback]
+  relay: [payctl charges timeline, 7 days, delivery evidence]
+  relay_variants: [seven days]
+- id: dh04
+  question: How does the nightly ledger reconciliation work?
+  hidden: [svc-ledger]
+  relay: [pg-ledger, ledger-recon, settlement files, journal lines]
+- id: dh05
+  question: How often do database credentials rotate?
+  hidden: [rb-rotate-db-creds, pol-secrets]
+  relay: [rotate-role, database/creds, 30-day, secret/prod, two security leads, audited monthly, every 30 days]
+- id: dh06
+  question: Black Friday is coming. How do I add cluster capacity, and how often do I post updates if it becomes a SEV1?
+  gold: [rb-sre-incident-response]
+  excluded: [rb-scale-cluster]
+  relay: [prod_pool_max, infra/clusters/prod, terraform apply, node pool maximum]

@@ -1,0 +1,8 @@
+{
+  "name": "docsworth",
+  "version": "0.2.0",
+  "description": "Team-owned, verified engineering knowledge for Claude Code: an MCP server that cites only canonical pages inside their review SLA, plus skills to draft, update and verify runbooks through PRs.",
+  "author": { "name": "docsworth" },
+  "license": "Apache-2.0",
+  "keywords": ["knowledge", "runbooks", "docs-as-code", "mcp", "codeowners"]
+}

@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- The same thread with Gmail's class names gone, as a markup change might leave it: only
+     the fallback selectors match (h2[data-legacy-thread-id], [role=main] [data-message-id],
+     div.ii.gt, span[email][name]). -->
+<html>
+  <head><meta charset="utf-8" /><title>Example Mail</title></head>
+  <body>
+    <div role="main">
+      <div><h2 data-legacy-thread-id="18d0000000000009">Fallback subject</h2></div>
+      <div data-message-id="#msg-f:9">
+        <span email="dee@example.com" name="Dee Example">Dee Example</span>
+        <div class="ii gt"><div>Body found by the fallback.</div></div>
+      </div>
+    </div>
+  </body>
+</html>

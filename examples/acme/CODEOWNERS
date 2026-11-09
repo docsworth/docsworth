@@ -1,0 +1,9 @@
+# Knowledge ownership: exactly one team per path (enforced by `docsworth lint`).
+# Last matching rule wins.
+/knowledge/                     @acme/devex
+/knowledge/services/            @acme/payments
+/knowledge/runbooks/            @acme/platform
+/knowledge/runbooks/payments-*  @acme/payments
+/knowledge/runbooks/sre-*       @acme/sre
+/knowledge/decisions/           @acme/platform
+/knowledge/security/            @acme/security

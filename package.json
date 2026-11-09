@@ -1,0 +1,77 @@
+{
+  "name": "@docsworth/cli",
+  "version": "0.2.0",
+  "description": "Git-native knowledge layer for coding agents: team-owned pages, review SLAs, a citation gate, and an MCP server agents read for free.",
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/docsworth/docsworth.git"
+  },
+  "homepage": "https://github.com/docsworth/docsworth#readme",
+  "bugs": {
+    "url": "https://github.com/docsworth/docsworth/issues"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "docsworth": "dist/cli.js"
+  },
+  "exports": {
+    "./host": {
+      "types": "./dist/core/host.d.ts",
+      "default": "./dist/core/host.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/pro",
+    "plugin",
+    "templates",
+    "docs/format-spec.md"
+  ],
+  "workspaces": [
+    "packages/ui",
+    "packages/web",
+    "packages/extension"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc -p tsconfig.build.json && npm run build -w @docsworth/web && node scripts/copy-web.mjs",
+    "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
+    "docsworth": "tsx --conditions=docsworth-source src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:core && npm run test:web",
+    "test:core": "npm run typecheck && vitest run",
+    "test:web": "npm test -w @docsworth/ui && npm test -w @docsworth/web && npm test -w @docsworth/extension",
+    "test:watch": "vitest",
+    "bench:search": "tsx scripts/bench-search.ts",
+    "live:github": "tsx scripts/live/github.ts",
+    "live:quickstart": "tsx scripts/live/quickstart.ts",
+    "live:skills": "tsx scripts/live/skills.ts",
+    "live:governance": "tsx scripts/live/governance.ts",
+    "live:polish": "tsx scripts/live/polish.ts",
+    "live:serve": "tsx scripts/live/serve.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "commander": "^15.0.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@mixmark-io/domino": "2.2.0",
+    "@types/commonmark": "0.27.10",
+    "@types/node": "^22.20.5",
+    "commonmark": "0.31.2",
+    "entities": "3.0.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

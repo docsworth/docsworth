@@ -1,0 +1,9 @@
+{
+  "extends": "../ui/tsconfig.json",
+  "compilerOptions": {
+    // The view tests start the real core server in-process, so they see Node's types too.
+    "types": ["vite/client", "node"],
+    "allowImportingTsExtensions": false
+  },
+  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
+}

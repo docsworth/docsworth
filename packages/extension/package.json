@@ -1,0 +1,23 @@
+{
+  "name": "@docsworth/extension",
+  "version": "0.2.0",
+  "private": true,
+  "description": "The Docsworth browser extension (Chromium, Manifest V3): a side panel over `docsworth serve`, a context-menu capture and a Gmail button. Built into packages/extension/dist and loaded unpacked; never published.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "vite build && vite build -c vite.content.config.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "npm run typecheck && vitest run"
+  },
+  "dependencies": {
+    "@docsworth/ui": "*",
+    "preact": "^11.2.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/chrome": "0.3.6",
+    "happy-dom": "^21.0.4",
+    "vite": "^8.3.6"
+  }
+}

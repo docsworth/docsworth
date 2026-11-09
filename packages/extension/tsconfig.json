@@ -1,0 +1,8 @@
+{
+  "extends": "../ui/tsconfig.json",
+  "compilerOptions": {
+    // The tests start the real core server and drive Chrome, so they see Node's types too.
+    "types": ["chrome", "vite/client", "node"]
+  },
+  "include": ["src", "test", "vite.config.ts", "vite.content.config.ts", "vitest.config.ts"]
+}

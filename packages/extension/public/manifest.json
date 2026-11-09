@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Docsworth",
+  "version": "0.2.0",
+  "description": "Search and read your team's Docsworth pages, and send what you find to them as a draft PR, through docsworth serve on this machine.",
+  "minimum_chrome_version": "130",
+  "permissions": ["sidePanel", "storage", "contextMenus", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "options_page": "options.html",
+  "action": { "default_title": "Open Docsworth" },
+  "content_scripts": [{ "matches": ["https://mail.google.com/*"], "js": ["gmail.js"], "run_at": "document_idle", "all_frames": false }],
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; connect-src http://127.0.0.1:* http://localhost:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'"
+  }
+}

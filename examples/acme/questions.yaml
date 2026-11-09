@@ -1,0 +1,182 @@
+# Benchmark questions for the acme example (harness validation only — see spec R24).
+# `gold` lists the pages that answer the question: a correct answer cites at least one,
+# and citing all of them counts toward recall. `accept` lists citable pages that state a
+# fact answering part of the question without being its source, and pages that a gold page
+# links to from the passage that answers the question: an answer may follow that link and
+# cite what it used. Citing one is not an error, but it never stands in for gold. Any
+# other page that links to the answer, or describes a neighbouring procedure, is in
+# neither list. Labels approved 2026-11-03;
+# this is the training set, and questions-heldout.yaml is scored but never read while tuning.
+- id: q01
+  question: How do I deploy a service to production?
+  gold: [rb-deploy-prod]
+  accept: [adr-0002]
+- id: q02
+  question: What traffic percentages does the production canary step through?
+  gold: [rb-deploy-prod, adr-0002]
+  accept: [glossary]
+- id: q03
+  question: How do I abort a production deploy that is still in its canary?
+  gold: [rb-deploy-prod]
+  accept: [adr-0002, rb-rollback-deploy]
+- id: q04
+  question: A deploy already reached 100% of traffic and errors spiked. How do I roll back?
+  gold: [rb-rollback-deploy]
+  accept: [rb-deploy-prod]
+- id: q05
+  question: Why did we stop using the Jenkins deploy job?
+  gold: [adr-0002]
+- id: q06
+  question: How do I force a TLS certificate to be reissued?
+  gold: [rb-rotate-tls]
+- id: q07
+  question: What should I do if the private key for a TLS certificate leaked?
+  gold: [rb-rotate-tls]
+- id: q08
+  question: How do I restore a production Postgres database to a point in time?
+  gold: [rb-restore-postgres]
+- id: q09
+  question: How far back can we restore a Postgres cluster?
+  gold: [rb-restore-postgres]
+- id: q10
+  question: Can I restore a database backup to undo a bad schema migration?
+  gold: [rb-restore-postgres]
+  accept: [adr-0001]
+- id: q11
+  question: Which database should a new service use for its system-of-record data?
+  gold: [adr-0001]
+- id: q12
+  question: How do I ship an urgent fix when main contains unreleased changes?
+  gold: [rb-hotfix]
+- id: q13
+  question: Refunds are failing at a 3% rate over the last 15 minutes. What do I do?
+  gold: [rb-payments-refund-failures]
+- id: q14
+  question: Should I retry refunds that failed with insufficient_balance?
+  gold: [rb-payments-refund-failures]
+- id: q15
+  question: Is it safe for a client to retry a money-moving write after a timeout?
+  gold: [adr-0003]
+  accept: [glossary, rb-payments-refund-failures]
+- id: q16
+  question: The webhook dispatch queue has 80,000 messages in it. How do I drain it?
+  gold: [rb-payments-webhook-backlog]
+- id: q17
+  question: How many webhook dispatcher replicas should run once a backlog is cleared?
+  gold: [rb-payments-webhook-backlog]
+- id: q18
+  question: How do I declare an incident?
+  gold: [rb-sre-incident-response]
+- id: q19
+  question: How often should status updates be posted during a SEV1?
+  gold: [rb-sre-incident-response]
+- id: q20
+  question: A page has not been acknowledged. Who gets paged next, and when?
+  gold: [rb-sre-escalation]
+- id: q21
+  question: What is the availability SLO for the Payments API charges endpoint?
+  gold: [svc-payments]
+- id: q22
+  question: Which payment service providers does the Payments API route cards through?
+  gold: [svc-payments]
+  accept: [glossary]
+- id: q23
+  question: What should a new backend engineer do in their first week?
+  gold: [onb-backend]
+  accept: [rb-deploy-prod]
+- id: q24
+  question: What does IC stand for in an incident?
+  gold: [glossary]
+- id: q25
+  question: What is Shipyard?
+  gold: [glossary, rb-deploy-prod]
+  accept: [adr-0002]
+# q26–q50: added 2026-11-03 so the next change can be measured; labels approved by the
+# owner the same day. Several target the patterns left in round v2: an answer page that links a
+# neighbouring procedure (q29, q32, q33, q48, q49), a deprecated page as the top hit
+# (q28), a page the bench identity cannot see (q50), two-part questions (q33, q43), and an
+# answer that lives in page metadata (q31).
+- id: q26
+  question: How long must a change run in staging before it can be deployed to production?
+  gold: [rb-deploy-prod]
+- id: q27
+  question: Can I deploy to production with kubectl apply?
+  gold: [rb-deploy-prod]
+  accept: [adr-0002]
+- id: q28
+  question: Can I still deploy with the Jenkins deploy-prod job? If not, what do I use instead?
+  gold: [adr-0002, rb-deploy-prod]
+- id: q29
+  question: I need to ship an emergency fix at 2am. Should I use the normal production deploy?
+  gold: [rb-deploy-prod]
+  accept: [rb-hotfix]
+- id: q30
+  question: How do I find the last good SHA to roll a production service back to?
+  gold: [rb-rollback-deploy]
+- id: q31
+  question: Which team owns the runbook for draining the webhook backlog?
+  gold: [rb-payments-webhook-backlog]
+- id: q32
+  question: After a rollback, how do I ship the fixed version again?
+  gold: [rb-rollback-deploy]
+  accept: [rb-deploy-prod]
+- id: q33
+  question: A deploy at 100% broke checkout and we declared a SEV1. How do I roll back, and how often do I post status updates?
+  gold: [rb-rollback-deploy, rb-sre-incident-response]
+  accept: [rb-deploy-prod]
+- id: q34
+  question: Which commit should a hotfix branch be cut from?
+  gold: [rb-hotfix]
+- id: q35
+  question: A hotfix is live in production. What still has to happen with main?
+  gold: [rb-hotfix]
+- id: q36
+  question: Origin load spiked right after a CDN purge. What should I do?
+  gold: [rb-flush-cdn]
+- id: q37
+  question: Does a point-in-time restore overwrite the production Postgres cluster?
+  gold: [rb-restore-postgres]
+- id: q38
+  question: A newly reissued TLS certificate is breaking some clients. How do I go back to the previous one?
+  gold: [rb-rotate-tls]
+- id: q39
+  question: Can a service keep a Redis cache in front of its Postgres data?
+  gold: [adr-0001]
+- id: q40
+  question: What compatibility rule do schema migrations have to follow?
+  gold: [adr-0001]
+- id: q41
+  question: How long are idempotency keys kept, and what happens when one is reused?
+  gold: [adr-0003]
+- id: q42
+  question: A merchant says refunds have been stuck in pending for two days. What should I check first?
+  gold: [rb-payments-refund-failures]
+- id: q43
+  question: Refunds are failing during a Stripe outage. What should I do, and which other PSP do we route cards through?
+  gold: [rb-payments-refund-failures, svc-payments]
+  accept: [glossary]
+- id: q44
+  question: Merchants report missing webhook events. What should I check first?
+  gold: [rb-payments-webhook-backlog]
+- id: q45
+  question: I declared an incident by mistake. Can I delete it?
+  gold: [rb-sre-incident-response]
+- id: q46
+  question: Who assigns the scribe and comms lead in an incident, and how quickly?
+  gold: [rb-sre-incident-response]
+  accept: [glossary]
+- id: q47
+  question: A SEV1 is open at 3am. Who should be paged besides the on-call engineer?
+  gold: [rb-sre-escalation]
+  accept: [rb-sre-incident-response]
+- id: q48
+  question: Which PagerDuty schedule covers the Payments API?
+  gold: [svc-payments]
+  accept: [rb-sre-escalation]
+- id: q49
+  question: What should a new backend engineer use to ship to production on day four?
+  gold: [onb-backend]
+  accept: [rb-deploy-prod]
+- id: q50
+  question: What is Abacus?
+  gold: [glossary]

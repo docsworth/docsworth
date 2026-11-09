@@ -1,0 +1,180 @@
+{
+  "_comment": "Confluence Cloud space ENG for the acme example. Fields mirror the REST v2 page object (id, title, parentId, createdAt, version, body.storage) plus labels and a read-restriction flag that the fixture server exposes through the labels and v1 restriction endpoints. Shapes to be re-checked against a live recording (spec R16).",
+  "space": {
+    "id": "98304",
+    "key": "ENG",
+    "name": "Engineering"
+  },
+  "pages": [
+    {
+      "id": "1001",
+      "title": "Production Deploy Process",
+      "parentId": null,
+      "createdAt": "2023-03-02T10:00:00.000Z",
+      "version": {
+        "number": 3,
+        "createdAt": "2024-06-11T09:12:00.000Z"
+      },
+      "labels": [
+        "deploy"
+      ],
+      "restricted": false,
+      "body": "<p>All production deploys run through the <strong>deploy-prod</strong> Jenkins job.</p><ol><li><p>Open the deploy-prod job and click <em>Build with parameters</em>.</p></li><li><p>Enter the service name and the release tag.</p></li><li><p>Approve the manual gate. The new version goes to 100% of traffic at once.</p></li></ol><p>To stop a bad deploy, abort the Jenkins build.</p>"
+    },
+    {
+      "id": "1002",
+      "title": "How to roll back",
+      "parentId": "1001",
+      "createdAt": "2024-01-15T08:00:00.000Z",
+      "version": {
+        "number": 2,
+        "createdAt": "2024-02-01T16:40:00.000Z"
+      },
+      "labels": [],
+      "restricted": false,
+      "body": "<p>Re-run the <code>deploy-prod</code> Jenkins job with the previous release tag. Rollbacks take about 15 minutes.</p>"
+    },
+    {
+      "id": "1003",
+      "title": "TLS certificates",
+      "parentId": null,
+      "createdAt": "2022-11-20T12:00:00.000Z",
+      "version": {
+        "number": 5,
+        "createdAt": "2023-08-30T11:05:00.000Z"
+      },
+      "labels": [
+        "team-platform"
+      ],
+      "restricted": false,
+      "body": "<p>Certificates come from Let's Encrypt via <code>certbot</code> on the bastion host and expire every 90 days.</p><ac:structured-macro ac:name=\"code\"><ac:parameter ac:name=\"language\">bash</ac:parameter><ac:plain-text-body><![CDATA[ssh bastion\nsudo certbot renew --force-renewal\nsudo systemctl restart nginx]]></ac:plain-text-body></ac:structured-macro><p>If a key leaks, email the security team.</p>"
+    },
+    {
+      "id": "1004",
+      "title": "Refunds FAQ",
+      "parentId": null,
+      "createdAt": "2025-05-10T09:00:00.000Z",
+      "version": {
+        "number": 7,
+        "createdAt": "2025-11-20T14:22:00.000Z"
+      },
+      "labels": [
+        "team-payments"
+      ],
+      "restricted": false,
+      "body": "<h2>Refunds are failing</h2><p>If more than 5% of refunds fail, retry all of them with <code>payctl refunds retry --all</code>. Retrying is always safe.</p><h2>Refund stuck in pending</h2><p>Wait 72 hours before escalating to the PSP.</p>"
+    },
+    {
+      "id": "1005",
+      "title": "On-call handbook",
+      "parentId": null,
+      "createdAt": "2024-02-01T09:00:00.000Z",
+      "version": {
+        "number": 24,
+        "createdAt": "2026-08-28T17:30:00.000Z"
+      },
+      "labels": [
+        "team-sre"
+      ],
+      "restricted": false,
+      "body": "<ac:structured-macro ac:name=\"info\"><ac:rich-text-body><p>Read this before your first shift.</p></ac:rich-text-body></ac:structured-macro><h2>Paging</h2><p>PagerDuty escalates to the secondary after 10 minutes without an acknowledgement.</p><h2>Incidents</h2><p>Declare in <code>#incidents</code> and post SEV1 status updates every hour.</p><p>Refund problems: see <ac:link><ri:page ri:content-title=\"Refunds FAQ\" /></ac:link>.</p>"
+    },
+    {
+      "id": "1006",
+      "title": "Kafka consumer lag",
+      "parentId": null,
+      "createdAt": "2025-09-10T10:00:00.000Z",
+      "version": {
+        "number": 4,
+        "createdAt": "2026-07-14T13:00:00.000Z"
+      },
+      "labels": [
+        "team-platform"
+      ],
+      "restricted": false,
+      "body": "<p>When the <code>KafkaConsumerLag</code> alert fires for more than 15 minutes:</p><ol><li><p>Check consumer group health with <code>kafkactl describe group &lt;group&gt;</code>.</p></li><li><p>Scale the consumer deployment; partitions cap useful replicas.</p></li><li><p>If one partition is hot, check for a poison message and move it to the dead-letter topic.</p></li></ol>"
+    },
+    {
+      "id": "1007",
+      "title": "Team offsite notes 2024",
+      "parentId": null,
+      "createdAt": "2024-04-03T09:00:00.000Z",
+      "version": {
+        "number": 1,
+        "createdAt": "2024-04-03T09:00:00.000Z"
+      },
+      "labels": [],
+      "restricted": false,
+      "body": "<p>Agenda: roadmap, hiring, team dinner. Action: look into replacing Jenkins.</p>"
+    },
+    {
+      "id": "1008",
+      "title": "Database credentials",
+      "parentId": null,
+      "createdAt": "2025-01-05T09:00:00.000Z",
+      "version": {
+        "number": 6,
+        "createdAt": "2026-04-10T09:00:00.000Z"
+      },
+      "labels": [
+        "team-security"
+      ],
+      "restricted": true,
+      "body": "<p>RESTRICTED CONTENT: production database passwords live in Vault under secret/prod.</p>"
+    },
+    {
+      "id": "1009",
+      "title": "Webhook retries",
+      "parentId": null,
+      "createdAt": "2023-06-01T09:00:00.000Z",
+      "version": {
+        "number": 2,
+        "createdAt": "2023-06-20T10:00:00.000Z"
+      },
+      "labels": [],
+      "restricted": false,
+      "body": "<p>If the webhook queue backs up, scale dispatchers to 50 replicas and leave them there.</p>"
+    },
+    {
+      "id": "1010",
+      "title": "Postgres restore (old)",
+      "parentId": null,
+      "createdAt": "2023-01-10T09:00:00.000Z",
+      "version": {
+        "number": 1,
+        "createdAt": "2023-01-10T09:00:00.000Z"
+      },
+      "labels": [],
+      "restricted": false,
+      "body": "<p>Restores come from the nightly <code>pg_dump</code> in S3. Only the last 7 days are kept. Restore over the production database during a maintenance window.</p>"
+    },
+    {
+      "id": "1011",
+      "title": "Vault break-glass",
+      "parentId": "1008",
+      "createdAt": "2025-02-01T09:00:00.000Z",
+      "version": {
+        "number": 2,
+        "createdAt": "2026-01-12T09:00:00.000Z"
+      },
+      "labels": [],
+      "restricted": false,
+      "body": "<p>RESTRICTED CONTENT (inherited): the break-glass root token procedure.</p>"
+    },
+    {
+      "id": "1012",
+      "title": "Shipyard CLI cheatsheet",
+      "parentId": null,
+      "createdAt": "2026-05-02T09:00:00.000Z",
+      "version": {
+        "number": 9,
+        "createdAt": "2026-10-01T15:00:00.000Z"
+      },
+      "labels": [
+        "team-platform"
+      ],
+      "restricted": false,
+      "body": "<p>Shipyard wraps Argo Rollouts. Common commands:</p><ul><li><p><code>shipyard deploy &lt;service&gt; --env prod --sha &lt;sha&gt;</code></p></li><li><p><code>shipyard abort &lt;service&gt;</code></p></li><li><p><code>shipyard history &lt;service&gt; --env prod</code></p></li></ul><p>Older process: <ac:link><ri:page ri:content-title=\"Production Deploy Process\" /></ac:link>. Kafka issues: <ac:link><ri:page ri:content-title=\"Kafka consumer lag\" /></ac:link>.</p>"
+    }
+  ]
+}

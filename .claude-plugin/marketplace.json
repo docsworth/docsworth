@@ -1,0 +1,13 @@
+{
+  "name": "docsworth",
+  "owner": { "name": "docsworth" },
+  "metadata": { "description": "docsworth: owned, verified, executable knowledge for coding agents.", "version": "0.2.0" },
+  "plugins": [
+    {
+      "name": "docsworth",
+      "source": "./plugin",
+      "description": "MCP server that cites only team-owned pages inside their review SLA, plus draft-runbook, update-after-incident and verify-page skills.",
+      "version": "0.2.0"
+    }
+  ]
+}

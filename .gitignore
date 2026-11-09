@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+# local runtime state written by the CLI / MCP server
+**/.knowledge/mirror/
+**/.knowledge/usage.jsonl
+**/.knowledge/cache/
+bench-results/
+
+# local preview config (points at a machine-specific scratch dir)
+.claude/launch.json
+*.tgz
+sbom.cdx.json
+

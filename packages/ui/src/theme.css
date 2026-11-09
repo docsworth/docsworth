@@ -1,0 +1,121 @@
+/* Docsworth UI theme: the coverage dashboard's palette, for the web app and the
+   extension. `:host` lets the same tokens style a widget inside a shadow root. */
+
+:root,
+:host {
+  --dw-bg: #fbfbfa;
+  --dw-surface: #ffffff;
+  --dw-fg: #1d1d1b;
+  --dw-muted: #6b6b66;
+  --dw-line: #e4e3de;
+  --dw-track: #ecebe6;
+  --dw-accent: #2b5fa8;
+  --dw-good: #2f7d4f;
+  --dw-warn: #b7791f;
+  --dw-bad: #b4442c;
+  --dw-code: #f2f1ed;
+  --dw-radius: 8px;
+  --dw-font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  --dw-mono: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root,
+  :host {
+    --dw-bg: #161615;
+    --dw-surface: #1d1d1c;
+    --dw-fg: #ecebe6;
+    --dw-muted: #9a9993;
+    --dw-line: #2c2c2a;
+    --dw-track: #2a2a28;
+    --dw-accent: #7aa7e8;
+    --dw-good: #58b07c;
+    --dw-warn: #d9a441;
+    --dw-bad: #e0735a;
+    --dw-code: #242422;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+.dw { background: var(--dw-bg); color: var(--dw-fg); font: var(--dw-font); }
+.dw a { color: var(--dw-accent); text-decoration: none; }
+.dw a:hover { text-decoration: underline; }
+.dw code { font: var(--dw-mono); background: var(--dw-code); padding: 0 4px; border-radius: 4px; }
+.dw h1 { font-size: 24px; margin: 0 0 4px; line-height: 1.25; }
+.dw h2 { font-size: 17px; margin: 28px 0 10px; }
+.dw-muted { color: var(--dw-muted); }
+.dw-num { font-variant-numeric: tabular-nums; }
+
+/* Layout */
+.dw-header { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding: 12px 20px; border-bottom: 1px solid var(--dw-line); background: var(--dw-surface); }
+.dw-brand { font-weight: 650; letter-spacing: -0.01em; color: var(--dw-fg) !important; }
+.dw-nav { display: flex; gap: 4px; flex-wrap: wrap; }
+.dw-nav a { padding: 6px 10px; border-radius: 6px; color: var(--dw-muted); }
+.dw-nav a[aria-current="page"] { color: var(--dw-fg); background: var(--dw-track); }
+.dw-who { margin-left: auto; font-size: 13px; color: var(--dw-muted); display: flex; gap: 8px; align-items: center; }
+.dw-main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 64px; }
+.dw-sub { color: var(--dw-muted); margin: 0 0 20px; }
+
+/* Tiles and tables */
+.dw-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.dw-tile { border: 1px solid var(--dw-line); border-radius: var(--dw-radius); padding: 14px 16px; background: var(--dw-surface); }
+.dw-tile b { display: block; font-size: 28px; font-variant-numeric: tabular-nums; }
+.dw-tile span { color: var(--dw-muted); font-size: 13px; }
+.dw-table { width: 100%; border-collapse: collapse; }
+.dw-table th, .dw-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--dw-line); vertical-align: middle; }
+.dw-table thead th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dw-muted); font-weight: 600; }
+.dw-scroll { overflow-x: auto; }
+.dw-bar { height: 8px; background: var(--dw-track); border-radius: 4px; overflow: hidden; max-width: 240px; margin-bottom: 4px; }
+.dw-bar > span { display: block; height: 100%; }
+.dw-good { background: var(--dw-good); }
+.dw-warn { background: var(--dw-warn); }
+.dw-bad { background: var(--dw-bad); }
+
+/* Badges */
+.dw-badge { display: inline-block; font-size: 12px; line-height: 18px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--dw-line); color: var(--dw-muted); white-space: nowrap; }
+.dw-badge.ok { color: var(--dw-good); border-color: currentColor; }
+.dw-badge.warn { color: var(--dw-warn); border-color: currentColor; }
+.dw-badge.bad { color: var(--dw-bad); border-color: currentColor; }
+.dw-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--dw-muted); }
+
+/* Search */
+.dw-search { display: flex; gap: 8px; margin-bottom: 20px; }
+.dw-search input { flex: 1; }
+.dw-results { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.dw-result { border: 1px solid var(--dw-line); border-radius: var(--dw-radius); padding: 12px 14px; background: var(--dw-surface); }
+.dw-result h3 { font-size: 16px; margin: 0 0 4px; }
+.dw-result p { margin: 6px 0 0; color: var(--dw-muted); font-size: 14px; }
+.dw-excluded { border-left: 3px solid var(--dw-warn); padding: 8px 12px; margin: 6px 0; background: var(--dw-surface); }
+
+/* Page */
+.dw-page { max-width: 760px; }
+.dw-prose { line-height: 1.65; }
+.dw-prose pre { font: var(--dw-mono); background: var(--dw-code); padding: 12px 14px; border-radius: var(--dw-radius); overflow-x: auto; }
+.dw-prose pre code { background: none; padding: 0; }
+.dw-prose h1 { font-size: 22px; margin-top: 24px; }
+.dw-prose h2 { margin-top: 24px; }
+.dw-note { border: 1px solid var(--dw-line); border-left: 3px solid var(--dw-warn); border-radius: 6px; padding: 10px 12px; margin: 12px 0; background: var(--dw-surface); font-size: 14px; }
+.dw-error { border-left-color: var(--dw-bad); }
+
+/* Forms */
+.dw input, .dw select, .dw textarea, .dw button { font: inherit; color: inherit; }
+.dw input, .dw select, .dw textarea { background: var(--dw-surface); border: 1px solid var(--dw-line); border-radius: 6px; padding: 8px 10px; width: 100%; }
+.dw textarea { font: var(--dw-mono); min-height: 220px; resize: vertical; }
+.dw button { background: var(--dw-fg); color: var(--dw-bg); border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 550; }
+.dw button.secondary { background: transparent; color: var(--dw-fg); border: 1px solid var(--dw-line); }
+.dw button:disabled { opacity: 0.45; cursor: not-allowed; }
+.dw-form { display: grid; gap: 14px; max-width: 760px; }
+.dw-form label { display: grid; gap: 6px; font-size: 14px; font-weight: 550; }
+.dw-form .dw-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.dw-preview { font: var(--dw-mono); white-space: pre-wrap; background: var(--dw-code); border-radius: var(--dw-radius); padding: 12px 14px; max-height: 260px; overflow: auto; }
+
+/* Graph */
+.dw-graph { width: 100%; height: 560px; border: 1px solid var(--dw-line); border-radius: var(--dw-radius); background: var(--dw-surface); display: block; }
+.dw-graph line { stroke: var(--dw-line); stroke-width: 1.2; }
+.dw-graph circle { stroke: var(--dw-surface); stroke-width: 1.5; cursor: pointer; }
+.dw-graph circle.dim { opacity: 0.35; }
+.dw-graph text { font-size: 11px; fill: var(--dw-muted); pointer-events: none; }
+.dw-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--dw-muted); margin: 10px 0; }
+.dw-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }

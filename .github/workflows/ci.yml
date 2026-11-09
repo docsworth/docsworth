@@ -1,0 +1,57 @@
+# CI for Docsworth itself. (templates/github/knowledge.yml is the workflow for
+# customers' knowledge repos; this one tests the tool.)
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Actions are pinned by commit SHA; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.12"
+          cache: npm
+      - run: npm ci
+      # The suite builds, packs and installs the real tarball; npm fetches only public
+      # dependencies for it.
+      - run: npm test
+        env:
+          # The tests never shell out to the GitHub CLI for a token.
+          DOCSWORTH_NO_GH_CLI: "1"
+      # The CLI's production dependencies.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      # The CLI's tarball must never carry pro, which is a separate, proprietary package
+      # (under its own licence): the root package.json "files" leaves it out, and this step
+      # fails if any of it comes in. The SBOM lists the
+      # CLI's production dependencies.
+      - name: Build, pack, check the tarball, SBOM
+        run: |
+          npm run build
+          npm pack
+          files=$(tar -tzf ./*.tgz)
+          grep -Fqx 'package/dist/cli.js' <<<"$files" || { echo "dist/cli.js is missing from the tarball"; exit 1; }
+          if grep -E '^package/(dist/pro/|packages/)|LICENSE-PRO|LICENSE\.md$' <<<"$files"; then echo "pro is in the CLI's tarball (listed above)"; exit 1; fi
+          npm sbom --sbom-format cyclonedx --omit dev --workspaces=false > sbom.cdx.json
+      # As a customer gets it: the tarball installed into an empty folder, `init` and
+      # `lint`, and the plugin's MCP launcher serving the tools, the polish prompt and a
+      # citable search hit.
+      - name: Clean install from the tarball
+        run: npx tsx scripts/smoke-install.ts ./*.tgz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: |
+            *.tgz
+            sbom.cdx.json
+          retention-days: 14

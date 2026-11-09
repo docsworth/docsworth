@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- A Gmail-shaped thread, written from Gmail's markup as of 2026-11 (the selectors in
+     src/content/adapter.ts): the subject is h2.hP, each expanded message is
+     div.adn[data-message-id] with its sender in span.gD and its body in div.a3s. A collapsed
+     message has no body in the page. Names and addresses are made up. -->
+<html>
+  <head><meta charset="utf-8" /><title>Inbox - someone@example.com - Example Mail</title></head>
+  <body>
+    <div role="navigation">Inbox · Starred · Sent</div>
+    <div role="main">
+      <div class="ha">
+        <h2 class="hP" data-thread-perm-id="thread-f:1790000000000000001" data-legacy-thread-id="18d0000000000001" tabindex="-1">Re: Payments worker stuck after the deploy SUBJECT_NONCE</h2>
+      </div>
+      <div class="adn ads" data-message-id="#msg-f:1790000000000000001" data-legacy-message-id="18d0000000000001">
+        <div class="gs">
+          <span class="gD" email="ana@example.com" name="Ana Example" data-hovercard-id="ana@example.com">Ana Example</span>
+          <span class="g3" title="Fri, Nov 6, 2026, 9:12 AM">Nov 6</span>
+          <div class="ii gt"><div class="a3s aiL">
+            <div>The payments worker stopped draining the queue after Thursday's deploy.</div>
+            <div>Restarting the consumer group fixed it: <b>kubectl rollout restart deploy/payments-worker</b>.</div>
+          </div></div>
+        </div>
+      </div>
+      <div class="kv" data-message-id="#msg-f:1790000000000000002">
+        <span class="gD" email="ben@example.com" name="Ben Example">Ben Example</span>
+        <span class="y2">Collapsed: only a snippet is in the page…</span>
+      </div>
+      <div class="adn ads" data-message-id="#msg-f:1790000000000000003" data-legacy-message-id="18d0000000000003">
+        <div class="gs">
+          <span class="gD" email="cy@example.com" name="Cy Example">Cy Example</span>
+          <div class="ii gt"><div class="a3s aiL">
+            <div>It happens when the deploy lands mid-batch. Check the lag dashboard first.</div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

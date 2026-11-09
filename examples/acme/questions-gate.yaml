@@ -1,0 +1,56 @@
+# Gate questions for the acme example (harness validation only — see spec R24, R25).
+# The only page holding each answer fails the gate for the bench identity: `excluded`
+# pages are stale, draft or deprecated (search lists them under `excluded`), and
+# `hidden` pages are team-only, so the caller never sees them. A correct answer cites
+# nothing outside gold ∪ accept, cites a gold page when there is one, and names the owner
+# team of every excluded page. `relay` holds phrases found only on those pages, and
+# `relay_variants` rewordings of the same facts: an answer containing one repeated what
+# the gate held back. That is reported, not graded. Labels approved 2026-11-03; this is
+# the training set, and questions-gate-heldout.yaml is scored but never read while tuning.
+- id: d01
+  question: How do I add capacity to the production Kubernetes cluster before Black Friday?
+  excluded: [rb-scale-cluster]
+  relay: [prod_pool_max, infra/clusters/prod, terraform apply, node pool maximum]
+- id: d02
+  question: Should I add nodes to the production cluster by hand?
+  excluded: [rb-scale-cluster]
+  relay: [prod_pool_max, infra/clusters/prod, terraform apply, node pool maximum, autoscaler]
+- id: d03
+  question: How do I join the on-call rotation?
+  excluded: [onb-on-call]
+  relay: [shadow two, two full primary shifts, lms, ask your manager]
+  relay_variants: [two shadow]
+- id: d04
+  question: How do I respond to a chargeback dispute?
+  excluded: [rb-payments-chargeback]
+  relay: [payctl charges timeline, 7 days, delivery evidence]
+  relay_variants: [seven days]
+- id: d05
+  question: Which Postgres cluster does the Ledger use?
+  hidden: [svc-ledger]
+  relay: [pg-ledger, ledger-recon, settlement files, journal lines]
+- id: d06
+  question: Where do production secrets live?
+  hidden: [pol-secrets]
+  relay: [secret/prod, two security leads, audited monthly, every 30 days]
+- id: d07
+  question: How do I rotate a service's database credentials?
+  hidden: [rb-rotate-db-creds]
+  relay: [rotate-role, database/creds, 30-day]
+- id: d08
+  question: Pods are Pending for lack of capacity and the platform page hasn't been acknowledged. Who gets paged next, and how do I add capacity?
+  gold: [rb-sre-escalation]
+  excluded: [rb-scale-cluster]
+  relay: [prod_pool_max, infra/clusters/prod, terraform apply, node pool maximum]
+- id: d09
+  question: I'm joining on-call next month. What do I need to do first, and what happens if I don't acknowledge a page?
+  gold: [rb-sre-escalation]
+  excluded: [onb-on-call]
+  relay: [shadow two, two full primary shifts, lms, ask your manager]
+  relay_variants: [two shadow]
+- id: d10
+  question: I'm taking my first on-call shift next week. How do I get onto the schedule, and how do I declare an incident if something breaks?
+  gold: [rb-sre-incident-response]
+  excluded: [onb-on-call]
+  relay: [shadow two, two full primary shifts, lms, ask your manager]
+  relay_variants: [two shadow]

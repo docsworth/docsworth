@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    // This package's own host facade by name, as pro imports it: in this monorepo the
+    // workspace pro then loads core from source when the CLI runs under tsx.
+    "paths": { "@docsworth/cli/host": ["./src/core/host.ts"] }
+  },
+  "include": ["src", "test", "scripts", "vitest.config.ts"]
+}

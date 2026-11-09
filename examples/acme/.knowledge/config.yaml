@@ -1,0 +1,22 @@
+# Docsworth configuration (format 1). See docs/format-spec.md.
+format: 1
+knowledge_root: knowledge
+github:
+  # Team owners resolve to @acme/<team>.
+  org: acme
+  # A real deployment sets repo; then GitHub is the ACL authority and a token is
+  # required. Left unset here, so the example runs in local-only mode.
+  # repo: acme/knowledge
+sla:
+  due_soon_days: 14
+usage_log: true
+skills:
+  out_dir: skills
+mirror:
+  out_dir: .knowledge/mirror
+  sources:
+    - kind: confluence
+      base_url: https://acme.atlassian.net
+      spaces:
+        - key: ENG
+          acl: internal

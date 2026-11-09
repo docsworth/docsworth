@@ -1,0 +1,50 @@
+# Held-out benchmark questions for the acme example (harness validation only — see spec R24).
+# Written and labelled 2026-11-03, before any tuning run, by the same rule as
+# questions.yaml. Scored every round; their transcripts are never read while tuning, so
+# a gain here is the number to trust.
+- id: h01
+  question: How do I purge a single URL from the CDN cache?
+  gold: [rb-flush-cdn]
+- id: h02
+  question: Can I purge the entire CDN account to clear stale assets?
+  gold: [rb-flush-cdn]
+- id: h03
+  question: How long does Shipyard keep a deploy at 5% before moving to 25%?
+  gold: [rb-deploy-prod]
+- id: h04
+  question: What error rate during a canary step means the deploy is unhealthy?
+  gold: [rb-deploy-prod]
+- id: h05
+  question: How do I confirm that a rollback worked?
+  gold: [rb-rollback-deploy]
+- id: h06
+  question: When does cert-manager renew a TLS certificate on its own?
+  gold: [rb-rotate-tls]
+- id: h07
+  question: After a point-in-time restore, how do I get the recovered rows back into production?
+  gold: [rb-restore-postgres]
+- id: h08
+  question: A refund retry refunded a customer twice. How do I fix it?
+  gold: [rb-payments-refund-failures]
+- id: h09
+  question: How do I stop redelivering webhooks to merchants whose endpoints return 5xx?
+  gold: [rb-payments-webhook-backlog]
+- id: h10
+  question: How do I pull another team into an incident?
+  gold: [rb-sre-escalation]
+- id: h11
+  question: How soon after a SEV2 must a postmortem be scheduled?
+  gold: [rb-sre-incident-response]
+- id: h12
+  question: What is the p99 latency target for Payments API card authorisation?
+  gold: [svc-payments]
+- id: h13
+  question: What does SEV1 mean?
+  gold: [glossary]
+  accept: [rb-sre-incident-response]
+- id: h14
+  question: How many approvals does a hotfix PR need?
+  gold: [rb-hotfix]
+- id: h15
+  question: Why do all production deploys go through a canary?
+  gold: [adr-0002]

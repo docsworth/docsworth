@@ -1,0 +1,23 @@
+{
+  "name": "@docsworth/web",
+  "version": "0.2.0",
+  "private": true,
+  "description": "The Docsworth web app that `docsworth serve` serves at /. Built into the CLI's dist/web; never published.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "npm run typecheck && vitest run"
+  },
+  "dependencies": {
+    "@docsworth/ui": "*",
+    "preact": "^11.2.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "happy-dom": "^21.0.4",
+    "vite": "^8.3.6"
+  }
+}

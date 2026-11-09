@@ -1,0 +1,51 @@
+# Docsworth CI for a knowledge repo. Copy to .github/workflows/knowledge.yml
+# (`docsworth init --ci` does this).
+#  - Pull requests: lint frontmatter, ownership and links; dry-run the skills compiler.
+#  - Merges to the default branch: recompile skills and commit any changes.
+#    If the default branch is protected against bot pushes, replace the commit step
+#    with a PR (e.g. peter-evans/create-pull-request) or publish skills as an artifact.
+name: knowledge
+
+on:
+  pull_request:
+    paths: ["knowledge/**", "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", ".knowledge/config.yaml"]
+  push:
+    branches: [main]
+    paths: ["knowledge/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npx -y "__DOCSWORTH_PACKAGE__" lint .
+      - run: npx -y "__DOCSWORTH_PACKAGE__" compile . --dry-run
+
+  compile:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npx -y "__DOCSWORTH_PACKAGE__" compile .
+      - run: npx -y "__DOCSWORTH_PACKAGE__" compile . --check
+      - name: Commit regenerated skills
+        run: |
+          if [ -n "$(git status --porcelain -- skills)" ]; then
+            git config user.name "docsworth[bot]"
+            git config user.email "docsworth-bot@users.noreply.github.com"
+            git add skills
+            git commit -m "skills: recompile from knowledge [skip ci]"
+            git push
+          fi
