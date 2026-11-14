@@ -1186,6 +1186,8 @@ describe("link redaction: input size", () => {
   // Code review, round 6: each reference's paragraph was looked up among all of them. At
   // 1 MB that took 6.6× as long as prose of that size; indexed, 1.6× alone and up to 3.1×
   // under the full suite's load. Against prose on the same machine, so a slow runner moves both.
+  // Its time isn't the check: six 1 MB redactions take about 4.6 s here and 13.5–16.6 s on CI,
+  // and a slow runner took the public repo's main past the default 20 s before the ratio ran.
   it("references to many definitions that go, at 1 MB: within 4.5× of prose", () => {
     let text = "";
     for (let i = 0; text.length < 16 * N; i++) text += `> [l${i}]: ../security/rotate-db-credentials.md\n\n[l${i}]\n\n`;
@@ -1193,7 +1195,7 @@ describe("link redaction: input size", () => {
     const hostile = best(text);
     const benign = best(prose);
     expect(hostile, `${Math.round(hostile)} ms against ${Math.round(benign)} ms`).toBeLessThan(4.5 * benign);
-  });
+  }, 60_000);
 
   // Each place a host can start is parsed only up to where an authority ends and DNS allows.
   it("a URL whose path holds parentheses before letters not in ASCII, at 256 KB: under 1.5 s", () => {
