@@ -90,6 +90,11 @@ seen it pass.
 
 ## Recurring mistakes
 
+- A timing test with an absolute bound passes locally and fails on a loaded CI runner, which
+  can be 4–8× slower: the 1 MB reference test's 20 s timeout and the 256 KB tests' 1.5 s. →
+  Hold time against prose of the same size, measured in the same test (the input-size tests'
+  `or within 10× of prose`), give long work its own timeout, and compare a new timing test's
+  CI times with its bound before relying on it.
 - A refusal test that only asserts "it throws" can pass through a different, later
   refusal. That happened with hidden-id errors that compared messages but not codes.
   → Assert the specific message *and* code, and prove the test by deleting the guard it
