@@ -9,10 +9,12 @@ const EXT = process.env.DOCSWORTH_EXTENSION_ROOT!;
 const manifest = JSON.parse(readFileSync(join(EXT, "public/manifest.json"), "utf8"));
 
 describe("the manifest", () => {
-  it("asks for exactly the side panel, storage, the context menu and alarms", () => {
+  it("asks for exactly the side panel, storage, the context menu, alarms, and the clicked tab", () => {
     expect(manifest.manifest_version).toBe(3);
     // alarms: a capture's time limit is kept even if nothing else happens (handoff.ts).
-    expect(manifest.permissions).toEqual(["sidePanel", "storage", "contextMenus", "alarms"]);
+    // activeTab and scripting: capture.js runs in a tab only after a click there, the menu's
+    // or the toolbar button's (capture.ts); no host access to any site comes with them.
+    expect(manifest.permissions).toEqual(["sidePanel", "storage", "contextMenus", "alarms", "activeTab", "scripting"]);
     // 130: storage.session.getKeys(), so the worker lists the captures without reading the token.
     expect(manifest.minimum_chrome_version).toBe("130");
     expect(manifest.optional_permissions).toBeUndefined();
@@ -37,6 +39,12 @@ describe("the manifest", () => {
     expect(directives["connect-src"]).toEqual(["http://127.0.0.1:*", "http://localhost:*"]);
     expect(directives["object-src"]).toEqual(["'none'"]);
     expect(csp).not.toMatch(/unsafe|https?:\/\/(?!127\.0\.0\.1|localhost)/);
+  });
+
+  it("opens the panel from the worker, so a toolbar click gives the extension the tab", () => {
+    const worker = readFileSync(join(EXT, "src/background.ts"), "utf8");
+    expect(worker).toContain("chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false })");
+    expect(worker).toContain("chrome.action.onClicked.addListener((tab) => onAction(chrome, tab))");
   });
 
   it("pins storage.session to trusted contexts in the worker, rather than lean on Chrome's default", () => {

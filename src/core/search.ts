@@ -2,6 +2,8 @@
 // The plan says "BM25 first, embeddings later"; this keeps search dependency-free and
 // fast enough for 5,000 pages (scripts/bench-search.ts holds it to p95 < 500 ms).
 
+import { isTableCell, parseGfm, textIn } from "./gfm.js";
+
 export interface SearchDoc {
   title: string;
   headings?: string[];
@@ -89,6 +91,36 @@ export class SearchIndex {
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .slice(0, limit);
   }
+}
+
+// Blocks whose text a reader sees apart from what's next to them.
+const BLOCKS = new Set(["paragraph", "heading", "item", "block_quote", "code_block", "custom_block", "thematic_break"]);
+
+/**
+ * A page's markdown as a reader sees it, to cut snippets from: its words, code as written,
+ * an image as its label, a table's cells (`a | b`); no markup, link targets or raw HTML.
+ * It reads the tree the web app renders from (`parseGfm`), so a snippet cut from it holds
+ * exactly the words the page shows, and never ends inside markup (search's
+ * `snippets: "text"`).
+ */
+export function plainText(markdown: string): string {
+  let out = "";
+  const walker = parseGfm(markdown).walker();
+  for (let e = walker.next(); e; e = walker.next()) {
+    const n = e.node;
+    if (!e.entering) continue;
+    if (n.type === "text" || n.type === "code") out += n.literal ?? "";
+    else if (n.type === "code_block") out += ` ${n.literal ?? ""} `;
+    else if (isTableCell(n)) out += n.prev ? " | " : " ";
+    // As the web app labels an image (packages/ui/src/markdown.ts): `image: ` and its words,
+    // or its address when it has none, once; what's inside it (an image too) isn't shown.
+    else if (n.type === "image") {
+      out += `image: ${textIn(n) || n.destination || ""}`;
+      walker.resumeAt(n, false);
+    }
+    else if (n.type === "softbreak" || n.type === "linebreak" || BLOCKS.has(n.type)) out += " ";
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /** A ~maxLen window of `body` around the densest run of query terms. */

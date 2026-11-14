@@ -1,17 +1,35 @@
 import { useState } from "preact/hooks";
-import type { TargetedEvent, TargetedMouseEvent } from "preact";
+import type { ComponentChildren, TargetedEvent, TargetedMouseEvent } from "preact";
 import { renderMarkdown } from "../markdown.js";
 import { type AnyPage, isMirror, type SearchResponse } from "../types.js";
 import { Link, type Navigate, PageMeta } from "./basics.js";
 
-/** A snippet as plain text: link targets, heading marks, emphasis and code ticks taken out. */
+/**
+ * A markdown snippet as plain text: link targets, heading marks, emphasis and code ticks taken
+ * out. Only for a `serve` that sends markdown snippets; a current one cuts text for the web
+ * app and the panel (search's `snippets: "text"`), and those show as they come.
+ */
 export function plainSnippet(s: string): string {
-  return s
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/(^|\s)#{1,6}\s+/g, "$1")
-    .replace(/[*_`]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    s
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      // The server cuts a snippet from the markdown wherever 240 characters fall, and marks
+      // each cut end with "…" (src/core/search.ts), so a link can be cut too: at the start,
+      // after its text began; at the end, in its text or its target. Only an end it marked
+      // is read that way, and only a bracket not straight after a word (a[0] is no link).
+      // Deliberately a heuristic, for display only: a link written straight after a word
+      // (foo[bar](x)) cut at the end stays as markdown, as every snippet showed before; and
+      // uncut text ending in a literal "[text…" loses its "[". Neither loses words or shows
+      // anything new. Knowing the cuts exactly would need search's answer to change (plain
+      // text, or cut offsets), and agents read that answer too.
+      .replace(/^…([^[\]]*)\]\([^)\s]*\)/, "…$1")
+      .replace(/(^|[^\p{L}\p{N}_\]])!?\[([^\]]*)\]\([^)]*…$/u, "$1$2…")
+      .replace(/(^|[^\p{L}\p{N}_\]])!?\[([^\]]*…)$/u, "$1$2")
+      .replace(/(^|\s)#{1,6}\s+/g, "$1")
+      .replace(/[*_`]+/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 export function SearchBox({ initial = "", onSearch, placeholder = "Search the knowledge base" }: { initial?: string; onSearch: (q: string) => void; placeholder?: string }) {
@@ -29,8 +47,13 @@ export function SearchBox({ initial = "", onSearch, placeholder = "Search the kn
 }
 
 /** Citable results, then what matched but the gate excluded, with why and who owns it. */
-export function ResultList({ response, navigate }: { response: SearchResponse; navigate: Navigate }) {
+/**
+ * Search results, citable first, then what matched but can't be cited. `action` adds a control
+ * to each (the extension's "Add the capture here").
+ */
+export function ResultList({ response, navigate, action }: { response: SearchResponse; navigate: Navigate; action?: (page: { id: string; title: string }) => ComponentChildren }) {
   const { results, excluded } = response;
+  const asText = response.snippets === "text";
   return (
     <div>
       {results.length === 0 ? (
@@ -45,7 +68,8 @@ export function ResultList({ response, navigate }: { response: SearchResponse; n
                 </Link>
               </h3>
               <PageMeta page={r} navigate={navigate} />
-              <p>{plainSnippet(r.snippet)}</p>
+              <p>{asText ? r.snippet : plainSnippet(r.snippet)}</p>
+              {action?.(r)}
             </li>
           ))}
         </ul>
@@ -59,6 +83,7 @@ export function ResultList({ response, navigate }: { response: SearchResponse; n
                 {x.title}
               </Link>{" "}
               <span class="dw-muted">· {x.reason}</span>
+              {action && <div>{action(x)}</div>}
             </div>
           ))}
         </section>

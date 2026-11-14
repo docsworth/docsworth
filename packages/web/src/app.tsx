@@ -7,6 +7,7 @@ import {
   type DraftInput,
   type DraftResult,
   ErrorNotice,
+  GRAPH_LIMIT,
   type Graph,
   Link,
   LinkGraph,
@@ -87,8 +88,23 @@ function Header({ route, caps, navigate }: { route: Route; caps?: Capabilities; 
   );
 }
 
+/** How many of each overview list to ask for first: a big repo has hundreds of stale pages. */
+const OVERVIEW_LIST_LIMIT = 20;
+
 function OverviewView({ client, caps, navigate }: { client: DocsworthClient; caps?: Capabilities; navigate: Navigate }) {
-  const call = useCall(() => client.call<Overview>("ui_overview"), "overview");
+  // The server names only the pages it returns, so only those count as read; "Show all"
+  // asks again for every one.
+  const [all, setAll] = useState(false);
+  const call = useCall(() => client.call<Overview>("ui_overview", all ? {} : { list_limit: OVERVIEW_LIST_LIMIT }), `overview:${all}`);
+  const more = (shown: number, total: number | undefined) =>
+    !all && (total ?? 0) > shown ? (
+      <p class="dw-muted">
+        The first {shown} of {total}.{" "}
+        <button type="button" class="secondary" onClick={() => setAll(true)}>
+          Show all {total}
+        </button>
+      </p>
+    ) : null;
   return (
     <Loaded call={call}>
       {(o) => (
@@ -105,6 +121,14 @@ function OverviewView({ client, caps, navigate }: { client: DocsworthClient; cap
               { value: o.totals.due_soon, label: "due for review soon" },
             ]}
           />
+          {(o.skipped_files ?? 0) > 0 && (
+            <div class="dw-note">
+              {o.skipped_files === 1
+                ? "1 file under the knowledge root couldn't be read as a page, so nothing here shows it. "
+                : `${o.skipped_files} files under the knowledge root couldn't be read as pages, so nothing here shows them. `}
+              <code>docsworth lint</code> {o.skipped_files === 1 ? "lists it" : "lists them"} and says why.
+            </div>
+          )}
           <h2>By team</h2>
           <TeamBars teams={o.teams} navigate={navigate} />
           <h2>Due soon</h2>
@@ -124,8 +148,10 @@ function OverviewView({ client, caps, navigate }: { client: DocsworthClient; cap
               ))}
             </ul>
           )}
+          {more(o.due_soon.length, o.due_soon_total)}
           <h2>Stale or unowned</h2>
           <StaleTable entries={o.stale} navigate={navigate} />
+          {more(o.stale.length, o.stale_total)}
           {(caps?.pro.length ?? 0) === 0 && (
             <div class="dw-note">Coverage history, the SLA timeline, usage and access panels are part of Docsworth pro.</div>
           )}
@@ -146,7 +172,7 @@ function SearchView({ client, q, navigate }: { client: DocsworthClient; q: strin
 }
 
 function SearchResults({ client, q, navigate }: { client: DocsworthClient; q: string; navigate: Navigate }) {
-  const call = useCall(() => client.call<SearchResponse>("search", { query: q, limit: 15 }), q);
+  const call = useCall(() => client.call<SearchResponse>("search", { query: q, limit: 15, snippets: "text" }), q);
   return <Loaded call={call}>{(r) => <ResultList response={r} navigate={navigate} />}</Loaded>;
 }
 
@@ -181,6 +207,14 @@ function PageRoute({ client, caps, id, navigate }: { client: DocsworthClient; ca
   );
 }
 
+/** What a team should look at first: past review, then due soon, then unverified; retired pages last. */
+const REVIEW_ORDER: Record<string, number> = { overdue: 0, due_soon: 1, unverified: 2, fresh: 3 };
+const byReview = (a: Graph["nodes"][number], b: Graph["nodes"][number]) =>
+  Number(a.status === "deprecated") - Number(b.status === "deprecated") ||
+  (REVIEW_ORDER[a.sla_state] ?? 3) - (REVIEW_ORDER[b.sla_state] ?? 3) ||
+  (a.due ?? "9999").localeCompare(b.due ?? "9999") ||
+  a.title.localeCompare(b.title);
+
 function TeamView({ client, team, navigate }: { client: DocsworthClient; team: string; navigate: Navigate }) {
   const call = useCall(() => client.call<Graph>("ui_graph", { owner_team: team }), team);
   return (
@@ -188,9 +222,14 @@ function TeamView({ client, team, navigate }: { client: DocsworthClient; team: s
       {(g) => (
         <>
           <h1>{team}</h1>
-          <p class="dw-sub">{g.nodes.length} pages owned by this team that you can see.</p>
+          <p class="dw-sub">
+            {g.nodes.length} pages owned by this team that you can see, what needs review first.{" "}
+            <Link href={`/graph?team=${encodeURIComponent(team)}`} navigate={navigate}>
+              Its link graph
+            </Link>
+          </p>
           <ul class="dw-results">
-            {g.nodes.map((p) => (
+            {[...g.nodes].sort(byReview).map((p) => (
               <li class="dw-result" key={p.id}>
                 <h3>
                   <Link href={`/p/${encodeURIComponent(p.id)}`} navigate={navigate}>
@@ -207,20 +246,51 @@ function TeamView({ client, team, navigate }: { client: DocsworthClient; team: s
   );
 }
 
-function GraphView({ client, navigate }: { client: DocsworthClient; navigate: Navigate }) {
-  const call = useCall(() => client.call<Graph>("ui_graph"), "graph");
+function GraphView({ client, team, navigate }: { client: DocsworthClient; team: string | null; navigate: Navigate }) {
+  // The server picks at most GRAPH_LIMIT pages (the most-linked), and names only those.
+  const call = useCall(() => client.call<Graph>("ui_graph", { max_nodes: GRAPH_LIMIT, ...(team ? { owner_team: team } : {}) }), `graph:${team ?? ""}`);
   return (
     <Loaded call={call}>
-      {(g) => (
-        <>
-          <h1>Link graph</h1>
-          <p class="dw-sub">
-            {g.nodes.length} pages and {g.edges.length} links you can see. Opening this view counts as reading every page in it, so drafting
-            from this tab follows their audiences.
-          </p>
-          <LinkGraph graph={g} navigate={navigate} />
-        </>
-      )}
+      {(g) => {
+        const total = g.total ?? g.nodes.length;
+        const limited = total > g.nodes.length;
+        const owned = team ? ` owned by ${team}` : "";
+        const links = `${g.edges.length} ${g.edges.length === 1 ? "link" : "links"}`;
+        return (
+          <>
+            <h1>{team ? `Link graph: ${team}` : "Link graph"}</h1>
+            <p class="dw-sub">
+              {limited
+                ? `The ${g.nodes.length} most-linked of the ${total} pages${owned} you can see, and the ${links} among them.`
+                : `${g.nodes.length} ${g.nodes.length === 1 ? "page" : "pages"}${owned} and ${links} you can see.`}{" "}
+              Opening this view counts as reading the pages drawn in it, so drafting from this tab follows their audiences.
+            </p>
+            {(limited || team) && g.teams && (
+              <p class="dw-teams">
+                {team ? (
+                  <Link href="/graph" navigate={navigate}>
+                    All teams
+                  </Link>
+                ) : (
+                  "One team's pages:"
+                )}
+                {g.teams.map((t) =>
+                  t.team === team ? (
+                    <strong key={t.team}>
+                      {t.team} ({t.pages})
+                    </strong>
+                  ) : (
+                    <Link key={t.team} href={`/graph?team=${encodeURIComponent(t.team)}`} navigate={navigate}>
+                      {t.team} ({t.pages})
+                    </Link>
+                  ),
+                )}
+              </p>
+            )}
+            <LinkGraph graph={g} navigate={navigate} />
+          </>
+        );
+      }}
     </Loaded>
   );
 }
@@ -284,7 +354,7 @@ function Shell({ client }: { client: DocsworthClient }) {
       view = <TeamView client={client} team={route.team} navigate={navigate} />;
       break;
     case "graph":
-      view = <GraphView client={client} navigate={navigate} />;
+      view = <GraphView client={client} team={route.team} navigate={navigate} />;
       break;
     case "capture":
       view = <CaptureView client={client} caps={c} />;

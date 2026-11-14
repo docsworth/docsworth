@@ -4,7 +4,9 @@ import { join, posix } from "node:path";
 import { matchRule } from "./codeowners.js";
 import { CONFIG_PATH } from "./config.js";
 import { pageStatus } from "./gate.js";
-import { type Repo, resolveLink } from "./repo.js";
+import { EXTERNAL, linkFault, linkPath, pageLinks, shownPath, siteRoute } from "./links.js";
+import { printable } from "./printable.js";
+import type { Repo } from "./repo.js";
 
 export type Severity = "error" | "warning";
 export interface Diagnostic {
@@ -26,11 +28,21 @@ const DIR_TYPES: Record<string, string> = { runbooks: "runbook", decisions: "adr
 const ADR_FILENAME = /^ADR-\d{4}-[a-z0-9-]+\.md$/;
 
 /** Lint a loaded knowledge repo. Errors fail CI; warnings never do (e.g. overdue pages). */
+// Links as CommonMark reads them (R8: none in code or HTML, reference links through their
+// definitions), relative ones only, as written apart from encoding, without query or fragment.
+function lintedLinks(body: string): string[] {
+  return pageLinks(body)
+    .filter((d) => d && !EXTERNAL.test(d))
+    .map(linkPath)
+    .filter(Boolean);
+}
+
 export function lintRepo(repo: Repo, now: Date): LintResult {
   const out: Diagnostic[] = [];
   const err = (path: string, rule: string, message: string) => out.push({ severity: "error", path, rule, message });
   const warn = (path: string, rule: string, message: string) => out.push({ severity: "warning", path, rule, message });
   const root = repo.config.knowledge_root;
+  const extraFields = new Set(repo.config.frontmatter.extra_fields);
 
   // Repo-level structure.
   if (!repo.codeowners.path) err("CODEOWNERS", "codeowners-missing", "no CODEOWNERS file (.github/, root or docs/)");
@@ -94,19 +106,40 @@ export function lintRepo(repo: Repo, now: Date): LintResult {
     else seen.set(p.id, p.path);
   }
 
+  // The routes pages' slugs and ids give them, once, when a link first needs them.
+  let aliasMap: Map<string, string[]> | undefined;
+  const aliases = (route: string) => {
+    if (!aliasMap) {
+      aliasMap = new Map();
+      for (const p of repo.pages) {
+        const r = siteRoute(p.path.slice(root.length + 1), p.slug, p.id);
+        if (r !== null) aliasMap.set(r, [...(aliasMap.get(r) ?? []), p.path]);
+      }
+    }
+    return aliasMap.get(route) ?? [];
+  };
+
   for (const page of repo.pages) {
     const status = pageStatus(page, repo, now);
     if (status.ownership_problem) err(page.path, "ownership", status.ownership_problem);
 
-    for (const link of page.links) {
-      const target = resolveLink(page.path, link);
-      if (target.startsWith("..") || !existsSync(join(repo.root, target)))
-        err(page.path, "broken-link", `link to \`${link}\` does not resolve (${target})`);
+    for (const path of lintedLinks(page.body)) {
+      // Under the knowledge root a link names a page or an attachment. A directory or a file
+      // with no extension names no page redaction could recognize (a Docusaurus route, say).
+      const { target, fault, pages } = linkFault(repo.root, root, page.path, path, { aliases, staticDirs: repo.config.static_dirs });
+      const link = shownPath(path);
+      if (fault === "missing") err(page.path, "broken-link", `link to \`${link}\` does not resolve (${target})`);
+      else if (fault === "directory")
+        err(page.path, "broken-link", `link to \`${link}\` names a directory, not a page; link the page (\`${link.replace(/\/+$/, "")}/….md\`)`);
+      else if (fault === "extensionless")
+        err(page.path, "broken-link", `link to \`${link}\` names a file with no extension, not a page; link a page (\`.md\`) or an attachment`);
+      else if (fault === "route")
+        err(page.path, "broken-link", `link to \`${link}\` names ${target}, outside the knowledge root, and on a docs site the page ${pages!.join(" or ")}: link the one you mean, with its extension`);
     }
 
     for (const id of page.supersedes ?? [])
       if (!seen.has(id)) warn(page.path, "supersedes-unknown", `supersedes \`${id}\`, which is not a page in this repo`);
-    for (const f of page.unknownFields) warn(page.path, "unknown-field", `unknown frontmatter field \`${f}\``);
+    for (const f of page.unknownFields) if (!extraFields.has(f)) warn(page.path, "unknown-field", `unknown frontmatter field \`${f}\``);
 
     const dir = page.path.slice(root.length + 1).split("/")[0] ?? "";
     const wantType = DIR_TYPES[dir];
@@ -123,7 +156,8 @@ export function lintRepo(repo: Repo, now: Date): LintResult {
 }
 
 export function formatDiagnostics(result: LintResult): string {
-  const lines = result.diagnostics.map((d) => `${d.path}: ${d.severity} [${d.rule}] ${d.message}`);
+  // Paths and messages quote what pages hold: printed escaped, one diagnostic to a line.
+  const lines = result.diagnostics.map((d) => `${printable(d.path)}: ${d.severity} [${d.rule}] ${printable(d.message)}`);
   lines.push(`${result.pages} pages, ${result.errors} errors, ${result.warnings} warnings`);
   return lines.join("\n");
 }

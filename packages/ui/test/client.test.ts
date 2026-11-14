@@ -249,4 +249,27 @@ describe("DocsworthClient", () => {
     await c.close();
     expect(s.seen.at(-1)).toMatchObject({ method: "DELETE", headers: { "mcp-session-id": "s1" } });
   });
+
+  it("says no server answered, rather than 'Failed to fetch', and tries again on the next call", async () => {
+    const s = fakeServer({ "tools/call": (b) => toolResult(b.id, { structuredContent: { ok: true } }) });
+    let down = true;
+    const flaky: typeof fetch = (url, init) => (down ? Promise.reject(new TypeError("Failed to fetch")) : s.fetchImpl(url, init));
+    const c = new DocsworthClient({ url: "http://127.0.0.1:4747", token: "t", fetch: flaky });
+    const e = await c.call("ui_capabilities").then(() => undefined, (err: unknown) => err);
+    expect(e).toBeInstanceOf(DocsworthError);
+    expect(e).toMatchObject({ code: "unreachable", message: "No docsworth serve answered at http://127.0.0.1:4747. Is it running, on that port?" });
+    down = false; // started again
+    expect(await c.call("ui_capabilities")).toEqual({ ok: true });
+  });
+
+  it("says so for a server that stopped after a session began, too", async () => {
+    const s = fakeServer({ "tools/call": (b) => toolResult(b.id, { structuredContent: { ok: true } }) });
+    let down = false;
+    const flaky: typeof fetch = (url, init) => (down ? Promise.reject(new TypeError("Failed to fetch")) : s.fetchImpl(url, init));
+    const c = new DocsworthClient({ url: "http://127.0.0.1:4747", token: "t", fetch: flaky });
+    await c.call("ui_capabilities");
+    down = true;
+    await expect(c.call("ui_overview")).rejects.toMatchObject({ code: "unreachable" });
+  });
 });
+

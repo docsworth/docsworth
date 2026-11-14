@@ -46,6 +46,9 @@ export const FIELD_CHECKS: Readonly<Record<string, (v: unknown) => boolean>> = {
   acl: (v) => typeof v === "string" && SLUGISH.test(v),
   polish: (v) => typeof v === "boolean",
   limit: (v) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1000,
+  max_nodes: (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 500,
+  list_limit: (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000,
+  snippets: (v) => v === "markdown" || v === "text",
 };
 
 const ids = (xs: unknown) => (Array.isArray(xs) ? xs.map((x: Structured) => String(x?.id)) : []);
@@ -57,7 +60,7 @@ export const TOOLS: readonly ToolSpec[] = [
     surface: "all",
     write: false,
     policy: "search",
-    auditFields: ["type", "owner_team", "applies_to", "include_stale", "limit"],
+    auditFields: ["type", "owner_team", "applies_to", "include_stale", "limit", "snippets"],
     // Mirrored pages were shown too (as context), so they count as returned.
     returned: (sc) => ({ returned: [...ids(sc.results), ...ids(sc.mirrored)], excluded: ids(sc.excluded) }),
   },
@@ -86,8 +89,8 @@ export const TOOLS: readonly ToolSpec[] = [
   // The web app's views, on `docsworth serve` sessions only. They show page lists, so they
   // answer to `list`: a policy that refuses `list` refuses them too.
   { name: "ui_capabilities", surface: "http", write: false, policy: "list", auditFields: [], returned: () => ({}) },
-  { name: "ui_overview", surface: "http", write: false, policy: "list", auditFields: [], returned: (sc) => ({ returned: [...ids(sc.due_soon), ...ids(sc.stale)] }) },
-  { name: "ui_graph", surface: "http", write: false, policy: "list", auditFields: ["owner_team"], returned: (sc) => ({ returned: ids(sc.nodes) }) },
+  { name: "ui_overview", surface: "http", write: false, policy: "list", auditFields: ["list_limit"], returned: (sc) => ({ returned: [...ids(sc.due_soon), ...ids(sc.stale)] }) },
+  { name: "ui_graph", surface: "http", write: false, policy: "list", auditFields: ["owner_team", "max_nodes"], returned: (sc) => ({ returned: ids(sc.nodes) }) },
   // A page for the app: `read`'s view plus the ids of the visible pages it links to.
   {
     name: "ui_page",

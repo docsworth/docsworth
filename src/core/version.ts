@@ -1,6 +1,6 @@
 /** Format version of the knowledge repo contract in docs/format-spec.md. */
 export const FORMAT_VERSION = 1;
-export const PACKAGE_VERSION = "0.2.0";
+export const PACKAGE_VERSION = "0.3.0";
 
 /**
  * The npm package Docsworth is published as, with its version range: what `docsworth init
@@ -10,7 +10,7 @@ export const PACKAGE_VERSION = "0.2.0";
  * may fetch any of those. PUBLISHED_PACKAGE in plugin/bin/docsworth-mcp.mjs is kept equal
  * by a test, and scripts/release-guard.ts refuses a release outside its range.
  */
-export const PUBLISHED_PACKAGE = "@docsworth/cli@^0.2";
+export const PUBLISHED_PACKAGE = "@docsworth/cli@^0.3";
 
 /** The one package we publish (release checklist, decision 1): a release of any other name is refused. */
 export const PACKAGE_NAME = "@docsworth/cli";

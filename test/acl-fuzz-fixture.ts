@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Identity } from "../src/core/acl.js";
 import { LOCAL_IDENTITY } from "../src/core/identity.js";
@@ -47,3 +47,60 @@ const user = (login: string, teams: string[]): Identity => ({ mode: "github", lo
 export const NO_PAGES = ["knowledge/security/not-loaded.md", "knowledge/gone/away.md"];
 
 export const FUZZ_IDENTITIES: Identity[] = [LOCAL_IDENTITY, user("nina", []), user("pia", ["payments"]), user("sam", ["security"]), user("pat", ["platform", "payments"])];
+
+// For routes (the owner's decision, 2026-11-13): the same, on a docs site at `site_url`, with
+// pages a slug or id moves, number prefixes, a dotted file name, a category index, routes two
+// pages share, and repo paths outside the knowledge root. `null` is a page that fails to load.
+const SITE_URL = "https://docs.example.com/docs/";
+const ROUTE_PAGES: Record<string, { acl: string | null; fm?: string }> = {
+  "knowledge/guides/index.md": { acl: "internal", fm: "id: guides" },
+  "knowledge/guides/intro.md": { acl: "internal", fm: "id: intro" },
+  "knowledge/guides/setup.md": { acl: "internal", fm: "id: setup" },
+  "knowledge/guides/faq.md": { acl: "internal", fm: "id: faq" },
+  "knowledge/guides/intro/faq.md": { acl: "security", fm: "id: intro-faq\nslug: faq" },
+  "knowledge/handbook-page.md": { acl: "internal", fm: "id: handbook" },
+  "knowledge/next.md": { acl: "internal", fm: "id: next\nslug: /setup" },
+  "knowledge/setup.md": { acl: "security", fm: "id: setup-legacy\nslug: /legacy" },
+  "knowledge/guides/moved-src.md": { acl: "internal", fm: "id: moved-src\nslug: /moved/intro" },
+  "knowledge/x/secret-page.md": { acl: "security", fm: "id: secret-page\nslug: /moved/secret" },
+  "knowledge/sec/hsm.md": { acl: "security", fm: "id: hsm" },
+  "knowledge/sec/02-keys.md": { acl: "security", fm: "id: keys" },
+  "knowledge/sec/2.0-plan.md": { acl: "security", fm: "id: plan-2" },
+  "knowledge/old/vault-notes.md": { acl: "security", fm: "id: vault-notes\nslug: /vault" },
+  "knowledge/old/setup-old.md": { acl: "security", fm: "id: setup-old\nslug: /guides/setup(old)" },
+  "knowledge/old/underscore.md": { acl: "security", fm: "id: underscore\nslug: /handbook_" },
+  "knowledge/shared.md": { acl: "internal", fm: "id: shared" },
+  "knowledge/sec/shared-copy.md": { acl: "security", fm: "id: shared-copy\nslug: /shared" },
+  "knowledge/team.md": { acl: "internal", fm: "id: team" },
+  // Category indexes by their names as written (a real Docusaurus build, 2026-11-13).
+  "knowledge/04-other/other.md": { acl: "security", fm: "id: other" },
+  "knowledge/05-same/05-same.md": { acl: "internal", fm: "id: same" },
+  "knowledge/06-idx/01-index.md": { acl: "security", fm: "id: index" },
+  "knowledge/broken-team.md": { acl: null, fm: "slug: /team" },
+  "knowledge/broken-route.md": { acl: null, fm: "slug: /broken-route" },
+};
+/** Paths outside the knowledge root a link may name: a directory, a file, and one beside a hidden slug. */
+export const REPO_PATHS = ["src", "Makefile", "vault"];
+/** Routes no page has: a link to one fails closed. */
+export const NO_ROUTES = ["guides/gone", "gone", "sec"];
+
+export function routeRepo(): { repo: Repo; cleanup: () => void } {
+  const copy = acmeOnGitHub();
+  const cfg = join(copy.root, ".knowledge/config.yaml");
+  writeFileSync(cfg, `${readFileSync(cfg, "utf8").trimEnd()}\nsite_url: ${SITE_URL}\n`);
+  for (const [path, { acl, fm }] of Object.entries(ROUTE_PAGES)) {
+    const abs = join(copy.root, path);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(
+      abs,
+      acl === null
+        ? `---\ntitle: Broken page\n${fm}\n---\nNo valid frontmatter.\n`
+        : `---\ntitle: Route page\n${fm}\ntype: guide\nstatus: canonical\nowner_team: ${acl === "internal" ? "platform" : acl}\nlast_verified: 2026-10-20\nreview_every: 90d\nacl: ${acl}\n---\n# Route page\n`,
+    );
+  }
+  for (const [path, text] of [["src/index.ts", "export {};\n"], ["Makefile", "all:\n"], ["vault/README.md", "# vault\n"]]) {
+    mkdirSync(dirname(join(copy.root, path!)), { recursive: true });
+    writeFileSync(join(copy.root, path!), text!);
+  }
+  return { repo: loadRepo(copy.root), cleanup: copy.cleanup };
+}

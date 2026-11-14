@@ -5,5 +5,5 @@ export * from "./types.js";
 export { Bar, CitableBadge, ErrorNotice, Link, type Navigate, PageMeta, SlaBadge, StaleTable, TeamBars, Tiles } from "./components/basics.js";
 export { AppendForm, CaptureForm, type DraftInput, writeBlocked } from "./components/forms.js";
 export { type Call, Loaded, useCall } from "./components/call.js";
-export { layout, LinkGraph, teamColors } from "./components/graph.js";
+export { GRAPH_LIMIT, layout, LinkGraph, teamColors } from "./components/graph.js";
 export { PageView, plainSnippet, ResultList, SearchBox } from "./components/pages.js";

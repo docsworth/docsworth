@@ -168,6 +168,32 @@ describe("handOff", () => {
     expect(t.session.writes).toEqual([]); // never stored, so no panel could have shown it
   });
 
+  it("reads the page only once the panel has opened, and only then sets the alarm and stores it", async () => {
+    // The context menu: the capture is made in the tab after the click (R10).
+    const t = api(() => Promise.resolve());
+    const make = () => (t.calls.push("read the page"), Promise.resolve(cap({ title: "read" })));
+    const done = handOff(t.api, 9, make, "k");
+    expect(t.calls).toEqual(["open 9"]);
+    expect(await done).toEqual({ ok: true });
+    expect(t.calls).toEqual(["open 9", "read the page", "alarm", "set"]);
+    expect(t.session.data.get("pending:k")).toEqual(cap({ title: "read" }));
+  });
+
+  it("never reads the page when the panel didn't open", async () => {
+    const t = api(() => Promise.reject(new Error("no gesture")));
+    const make = () => (t.calls.push("read the page"), Promise.resolve(cap()));
+    expect(await handOff(t.api, 9, make, "k")).toEqual({ ok: false, error: "no gesture" });
+    expect(t.calls).toEqual(["open 9"]);
+    expect(t.session.writes).toEqual([]);
+  });
+
+  it("leaves nothing when making the capture failed", async () => {
+    const t = api(() => Promise.resolve());
+    expect(await handOff(t.api, 9, () => Promise.reject(new Error("tab closed")), "k")).toEqual({ ok: false, error: "tab closed" });
+    expect(t.alarms).toEqual([]);
+    expect(t.session.writes).toEqual([]);
+  });
+
   it("answers with the write's error when the store refused it", async () => {
     const t = api(() => Promise.resolve());
     t.api.storage.session.set = () => Promise.reject(new Error("quota"));

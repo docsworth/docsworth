@@ -11,7 +11,7 @@ import { resolve } from "node:path";
 // The npm package to run. `agent-kb` on npm belongs to another publisher and nobody owns the
 // bare `docsworth`: never fall back to either. Kept equal to PUBLISHED_PACKAGE in
 // src/core/version.ts by test/package-name.test.ts.
-const PUBLISHED_PACKAGE = "@docsworth/cli@^0.2";
+const PUBLISHED_PACKAGE = "@docsworth/cli@^0.3";
 
 // The repo reaches the server in the environment, never on the command line, which Windows
 // runs through cmd.exe: a path would split at a space there, and what follows an `&` would

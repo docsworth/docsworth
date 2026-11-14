@@ -50,14 +50,18 @@ beforeAll(async () => {
 }, 30_000);
 
 let container: HTMLElement;
-afterEach(() => {
+/** The clients a test made: each holds a session, and the server keeps at most 16 open. */
+const clients: DocsworthClient[] = [];
+afterEach(async () => {
   render(null, container);
   container.remove();
+  await Promise.all(clients.splice(0).map((c) => c.close().catch(() => undefined)));
 });
 
 /** A client that records which tools it called, around the real one. */
 function recording() {
   const client = new DocsworthClient({ url: origin, token: TOKEN, name: "docsworth-extension" });
+  clients.push(client);
   const tools: string[] = [];
   const call = client.call.bind(client);
   client.call = ((tool: string, args?: Record<string, unknown>) => (tools.push(tool), call(tool, args))) as typeof client.call;
@@ -78,6 +82,7 @@ function panel(over: Partial<PanelEnv> = {}) {
     done: vi.fn(),
     openOptions: vi.fn(),
     newSession: vi.fn(),
+    capture: vi.fn().mockRejectedValue(new Error("no tab in this test")),
     extensionId: EXT_ID,
     ...over,
   };
@@ -125,6 +130,18 @@ describe("the side panel against a real serve", () => {
     await vi.waitFor(() => expect(root.querySelector(".dw-prose")).not.toBeNull(), { timeout: 8000 });
     expect(root.textContent).toContain("Suggest an addition");
     assertNoHiddenPage(root);
+  });
+
+  it("shows snippets cut from the page as a reader sees it, names as written", async () => {
+    const { root } = panel({ client: recording().client });
+    await vi.waitFor(() => expect(root.textContent).toContain("local mode"));
+    const box = root.querySelector<HTMLInputElement>("input[type=search]")!;
+    box.value = "insufficient balance refund";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    box.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    // Asked as text: `insufficient_balance` keeps its underscore (a markdown snippet lost it).
+    await vi.waitFor(() => expect(root.querySelector(".dw-result p")?.textContent).toContain("For insufficient_balance, do not retry"), { timeout: 8000 });
   });
 
   it("shows a Gmail capture with the pages it may already be in, and a draft filled from it, writing nothing", async () => {
@@ -302,6 +319,115 @@ describe("the side panel against a real serve", () => {
     expect(viewFor("/t/platform")).toEqual({ name: "team", team: "platform" });
     expect(viewFor("/search?q=a%20b")).toEqual({ name: "search", q: "a b" });
     expect(viewFor("/graph")).toBeNull();
+  });
+});
+
+/** A client that answers writes as GitHub mode would, and records each write's arguments. */
+function writing() {
+  const { client, tools } = recording();
+  const call = client.call.bind(client);
+  const writes: [string, Record<string, unknown>][] = [];
+  client.call = (async (tool: string, args?: Record<string, unknown>) => {
+    if (tool === "ui_capabilities") return { ...(await call<Record<string, unknown>>(tool, args)), writes: true, write_tools: ["draft_page", "propose_edit"] };
+    if (tool === "draft_page" || tool === "propose_edit") {
+      writes.push([tool, args ?? {}]);
+      return { pr_url: "https://github.com/acme/kb/pull/9", pr_number: 9, branch: "docsworth/x", id: "guide-x", path: "knowledge/guides/x.md" };
+    }
+    return call(tool, args);
+  }) as typeof client.call;
+  return { client, tools, writes };
+}
+
+const button = (root: HTMLElement, text: string) => [...root.querySelectorAll("button")].find((b) => b.textContent === text);
+const page = (over: Partial<Pending> = {}) =>
+  capture({ source: "page", title: "Deploying to production", text: "## Deploy\n\n```sh\nmake deploy\n```", url: "https://docs.example.com/deploy", ...over });
+
+describe("saving a page or a selection from the panel", () => {
+  it("reads the tab's page when asked, and opens it as a guide drafted from its markdown", async () => {
+    const env = { capture: vi.fn(async () => page()) };
+    const { root } = panel({ client: recording().client, ...env });
+    await vi.waitFor(() => expect(button(root, "Save this page")).toBeDefined());
+    button(root, "Save this page")!.click();
+    await vi.waitFor(() => expect(root.textContent).toContain("From a page"));
+    expect(env.capture).toHaveBeenCalledWith("page");
+    expect(input(root, "Title").value).toBe("Deploying to production");
+    expect(input(root, "Body").value).toBe("## Deploy\n\n```sh\nmake deploy\n```");
+    expect(input(root, "Source").value).toBe("https://docs.example.com/deploy");
+    expect((root.querySelector("select") as HTMLSelectElement).value).toBe("guide");
+    button(root, "Save the selection")!.click();
+    await vi.waitFor(() => expect(env.capture).toHaveBeenCalledWith("selection"));
+  });
+
+  it("says how to let it read a tab Chrome kept from it, and opens nothing", async () => {
+    const capture = vi.fn().mockRejectedValue(new Error("Cannot access contents of the page. Extension manifest must request permission to access the respective host."));
+    const { root } = panel({ client: recording().client, capture });
+    await vi.waitFor(() => expect(button(root, "Save this page")).toBeDefined());
+    button(root, "Save this page")!.click();
+    await vi.waitFor(() => expect(root.textContent).toContain("Docsworth can't read this tab yet"));
+    expect(root.textContent).toContain("click the Docsworth button in the toolbar while you're on it");
+    expect(root.textContent).toContain("Save page to Docsworth");
+    expect(root.textContent).not.toContain("From a page");
+  });
+
+  it("passes on any other reason it couldn't read the tab", async () => {
+    const { root } = panel({ client: recording().client, capture: vi.fn().mockRejectedValue(new Error("nothing is selected on this page")) });
+    await vi.waitFor(() => expect(button(root, "Save the selection")).toBeDefined());
+    button(root, "Save the selection")!.click();
+    await vi.waitFor(() => expect(root.textContent).toContain("nothing is selected on this page"));
+  });
+
+  it("shows a capture's note", async () => {
+    const { root, push } = panel({ client: recording().client });
+    await push([page({ note: "Cut at 64 KB: the rest of the page isn't in the draft." })]);
+    await vi.waitFor(() => expect(root.textContent).toContain("Cut at 64 KB: the rest of the page isn't in the draft."));
+  });
+
+  it("shows a capture only as form values: its markup makes no element", async () => {
+    const { root, push } = panel({ client: recording().client });
+    const evil = `<img src=x onerror="globalThis.pwned=1"><b id="evil">bold</b>`;
+    await push([page({ title: evil, text: evil, note: evil })]);
+    await vi.waitFor(() => expect(input(root, "Body").value).toBe(evil));
+    expect(root.querySelector("img, #evil")).toBeNull();
+    expect((globalThis as Record<string, unknown>).pwned).toBeUndefined();
+  });
+
+  it("adds a capture to a page it may already be in, with where it came from, as a PR", async () => {
+    const { client, writes } = writing();
+    const { root, env, push } = panel({ client });
+    await vi.waitFor(() => expect(root.textContent).toContain("local mode"));
+    const [key] = await push([page()]);
+    await vi.waitFor(() => expect(root.querySelector("[data-add-to]")).not.toBeNull(), { timeout: 8000 });
+    const target = root.querySelector<HTMLButtonElement>("[data-add-to]")!;
+    const id = target.getAttribute("data-add-to")!;
+    target.click();
+    const form = await vi.waitFor(() => {
+      const f = root.querySelector<HTMLFormElement>("form[aria-label^='Add to']");
+      if (!f) throw new Error("no addition form yet");
+      return f;
+    });
+    const text = form.querySelector("textarea")!;
+    expect(text.value).toMatch(/^> Captured from <https:\/\/docs\.example\.com\/deploy> on \d{4}-\d{2}-\d{2}\.\n\n## Deploy\n\n```sh\nmake deploy\n```$/);
+    const why = form.querySelector("input")!;
+    why.value = "The vendor's steps changed";
+    why.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(form.querySelector<HTMLButtonElement>("button[type=submit]")!.disabled).toBe(false));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toEqual(["propose_edit", { id, append: text.value, reason: "The vendor's steps changed" }]);
+    await vi.waitFor(() => expect(env.done).toHaveBeenCalledWith(key));
+    await vi.waitFor(() => expect(root.textContent).toContain("Proposed: PR #9"));
+  });
+
+  it("drafts a new page from a capture with its source, as a PR", async () => {
+    const { client, writes } = writing();
+    const { root, push } = panel({ client });
+    await vi.waitFor(() => expect(root.textContent).toContain("local mode"));
+    await push([page()]);
+    await vi.waitFor(() => expect((root.querySelector("form.dw-form button[type=submit]") as HTMLButtonElement | null)?.disabled).toBe(false));
+    root.querySelector("form.dw-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]![0]).toBe("draft_page");
+    expect(writes[0]![1]).toMatchObject({ type: "guide", title: "Deploying to production", body: "## Deploy\n\n```sh\nmake deploy\n```", source_url: "https://docs.example.com/deploy", reason: "Saved from a page" });
   });
 });
 

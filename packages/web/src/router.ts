@@ -8,7 +8,7 @@ export type Route =
   | { name: "search"; q: string }
   | { name: "page"; id: string }
   | { name: "team"; team: string }
-  | { name: "graph" }
+  | { name: "graph"; team: string | null }
   | { name: "capture" }
   | { name: "settings" }
   | { name: "missing" };
@@ -28,7 +28,8 @@ export function parseRoute(pathname: string, search: string): Route {
   if (head === "search" && parts.length === 1) return { name: "search", q: new URLSearchParams(search).get("q") ?? "" };
   if (head === "p" && arg && parts.length === 2) return { name: "page", id: decode(arg) };
   if (head === "t" && arg && parts.length === 2) return { name: "team", team: decode(arg) };
-  if (parts.length === 1 && (head === "graph" || head === "capture" || head === "settings")) return { name: head };
+  if (head === "graph" && parts.length === 1) return { name: "graph", team: new URLSearchParams(search).get("team") || null };
+  if (parts.length === 1 && (head === "capture" || head === "settings")) return { name: head };
   return { name: "missing" };
 }
 

@@ -33,6 +33,8 @@ export interface SearchResponse {
   results: SearchResult[];
   excluded: Excluded[];
   note?: string;
+  /** "text" when the server cut snippets from the page as a reader sees it (search's `snippets: "text"`). */
+  snippets?: "text";
 }
 
 export interface ReadResponse extends PageSummary {
@@ -89,6 +91,11 @@ export interface Overview {
   teams: (Tally & { team: string })[];
   due_soon: PageSummary[];
   stale: StaleEntry[];
+  /** How many there are when the lists were limited (list_limit). */
+  due_soon_total?: number;
+  stale_total?: number;
+  /** Files under the knowledge root that aren't valid pages: a count only, never their names. */
+  skipped_files?: number;
 }
 
 export interface GraphNode extends PageSummary {
@@ -98,6 +105,10 @@ export interface GraphNode extends PageSummary {
 export interface Graph {
   nodes: GraphNode[];
   edges: { from: string; to: string }[];
+  /** How many visible pages the nodes were chosen from: more than `nodes` when limited. */
+  total?: number;
+  /** Each team's visible page count (names no page). */
+  teams?: { team: string; pages: number }[];
 }
 
 export interface Capabilities {

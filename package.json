@@ -1,6 +1,6 @@
 {
   "name": "@docsworth/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Git-native knowledge layer for coding agents: team-owned pages, review SLAs, a citation gate, and an MCP server agents read for free.",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",
@@ -61,6 +61,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "commander": "^15.0.0",
+    "commonmark": "^0.31.2",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"
   },
@@ -68,7 +69,6 @@
     "@mixmark-io/domino": "2.2.0",
     "@types/commonmark": "0.27.10",
     "@types/node": "^22.20.5",
-    "commonmark": "0.31.2",
     "entities": "3.0.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

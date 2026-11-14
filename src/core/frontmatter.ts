@@ -19,15 +19,12 @@ const CLOSE = /\r?\n---[ \t]*(\r?\n|$)/;
  * isn't a plain number/bool/null stays a string, so dates round-trip exactly.
  */
 export function splitFrontmatter(text: string): SplitDoc {
-  const open = OPEN.exec(text);
-  if (!open) return { data: null, body: text, error: "missing frontmatter block" };
+  if (!OPEN.test(text)) return { data: null, body: text, error: "missing frontmatter block" };
+  const span = frontmatterSpan(text);
+  if (!span) return { data: null, body: text, error: "unterminated frontmatter block" };
 
-  const rest = text.slice(open[0].length);
-  const close = CLOSE.exec(rest);
-  if (!close) return { data: null, body: text, error: "unterminated frontmatter block" };
-
-  const yamlSrc = rest.slice(0, close.index);
-  const body = rest.slice(close.index + close[0].length);
+  const yamlSrc = text.slice(span.start, span.end);
+  const body = text.slice(span.bodyStart);
   // A page's frontmatter is a few hundred bytes; YAML parsing slows past linear on
   // hostile input (64 KB of `}&`: 650 ms, paid on every reload).
   if (Buffer.byteLength(yamlSrc, "utf8") > FRONTMATTER_MAX) return { data: null, body, error: `frontmatter is over ${FRONTMATTER_MAX / 1024} KB` };
@@ -40,6 +37,27 @@ export function splitFrontmatter(text: string): SplitDoc {
   } catch (err) {
     return { data: null, body, error: `invalid YAML: ${(err as Error).message.split("\n")[0]}` };
   }
+}
+
+export interface FrontmatterSpan {
+  /** Where the YAML starts: just after the opening `---` line. */
+  start: number;
+  /** Where it ends, before the closing `---` line's own line break. */
+  end: number;
+  /** Where the body starts, after the closing `---` line. */
+  bodyStart: number;
+  /** The opening line's line ending. */
+  eol: "\n" | "\r\n";
+}
+
+/** Where a page's frontmatter sits in `text`, by offset; null without a terminated block. */
+export function frontmatterSpan(text: string): FrontmatterSpan | null {
+  const open = OPEN.exec(text);
+  if (!open) return null;
+  const start = open[0].length;
+  const close = CLOSE.exec(text.slice(start));
+  if (!close) return null;
+  return { start, end: start + close.index, bodyStart: start + close.index + close[0].length, eol: open[0].length === 5 ? "\r\n" : "\n" };
 }
 
 /** Serialize frontmatter + body back to a markdown file (used by writes and promote). */

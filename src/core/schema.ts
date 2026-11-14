@@ -19,23 +19,25 @@ export const OPTIONAL_FIELDS = ["supersedes", "applies_to", "acl", "description"
 /** Default ACL: anyone with read access to the knowledge repo. */
 export const ACL_INTERNAL = "internal";
 
-const SLUG = /^[a-z0-9][a-z0-9_-]*$/;
-const ID = /^[a-z0-9][a-z0-9-]*$/;
+/** A team slug, or `internal` (owner_team, acl). */
+export const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
+/** A page id: lowercase letters, digits and dashes. */
+export const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 export const FrontmatterSchema = z.object({
   title: z.string().trim().min(1),
-  id: z.string().regex(ID, "lowercase letters, digits and dashes"),
+  id: z.string().regex(ID_RE, "lowercase letters, digits and dashes"),
   type: z.enum(PAGE_TYPES),
   status: z.enum(STATUSES),
   // A bare team slug; the org comes from config (github.org). Never `@user`.
-  owner_team: z.string().regex(SLUG, "a team slug like `platform` (no @, no org)"),
+  owner_team: z.string().regex(SLUG_RE, "a team slug like `platform` (no @, no org)"),
   last_verified: z
     .string()
     .refine((s) => parseDate(s) !== null, "a real calendar date as YYYY-MM-DD"),
   review_every: z.string().regex(DURATION_RE, "a period like 30d, 12w, 6m or 1y"),
-  supersedes: z.array(z.string().regex(ID)).optional(),
+  supersedes: z.array(z.string().regex(ID_RE)).optional(),
   applies_to: z.array(z.string().min(1)).optional(),
-  acl: z.string().regex(SLUG, "`internal` or a team slug").default(ACL_INTERNAL),
+  acl: z.string().regex(SLUG_RE, "`internal` or a team slug").default(ACL_INTERNAL),
   description: z.string().optional(),
 });
 
