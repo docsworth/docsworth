@@ -15,8 +15,9 @@ import { createMcpServer } from "../src/core/mcp/server.js";
 import { loadRepo } from "../src/core/repo.js";
 import { type ServeOptions, startServer } from "../src/core/serve/server.js";
 import { KnowledgeService } from "../src/core/service.js";
+import { computeSla } from "../src/core/sla.js";
 import { FakeGitHub } from "./fake-github.js";
-import { acmeOnGitHub, copyAcme, fixedIdentity, NOW } from "./helpers.js";
+import { acmeOnGitHub, copyAcme, fixedIdentity, INDEX, makeRepo, NOW, page } from "./helpers.js";
 
 const TOKEN = "u".repeat(43);
 const UI_TOOLS = ["ui_capabilities", "ui_graph", "ui_overview", "ui_page"];
@@ -41,7 +42,7 @@ afterEach(async () => {
 async function serveAt(root: string, opts: Partial<ServeOptions> & Pick<ServeOptions, "identity" | "who">) {
   const sink = new MemorySink();
   const audit = new AuditLog([sink], { session: "serve-run", server: { version: "test", repo: null, commit: null } }, () => NOW, () => {});
-  const s = await startServer({ root, knowledgeRoot: "knowledge", audit, includeQueries: false, now: () => NOW, port: 0, token: TOKEN, extensions: new Set(), webRoot: null, log: () => {}, ...opts });
+  const s = await startServer({ root, audit, includeQueries: false, now: () => NOW, port: 0, token: TOKEN, extensions: new Set(), webRoot: null, log: () => {}, ...opts });
   cleanups.push(() => s.close());
   return { s, sink };
 }
@@ -144,6 +145,19 @@ describe("ui tools: the HTTP surface and its policy (R4)", () => {
     expect(page.links).toMatchObject({ [adr]: "adr-0001" }); // as its content, read before the change, shows it
     // The change was real: the next answer, from a look after it, has no such link.
     expect((await service.uiPage({ id: "svc-payments" })).links).not.toHaveProperty(adr);
+  });
+
+  it("ui_page links what CommonMark links, link text with brackets in it too", async () => {
+    const repo = makeRepo({ ...INDEX, "knowledge/a.md": page({ id: "a" }, "See [the [linked] guide](b.md) and [plain](b.md).\n"), "knowledge/b.md": page({ id: "b" }) });
+    try {
+      const links = (await new KnowledgeService(repo.root, fixedIdentity(LOCAL_IDENTITY), () => NOW).uiPage({ id: "a" })).links;
+      expect(links).toEqual({ "knowledge/b.md": "b" });
+      // The bracketed link alone: the regex the loader keeps doesn't read it.
+      writeFileSync(join(repo.root, "knowledge/a.md"), page({ id: "a" }, "See [the [linked] guide](b.md).\n"));
+      expect((await new KnowledgeService(repo.root, fixedIdentity(LOCAL_IDENTITY), () => NOW).uiPage({ id: "a" })).links).toEqual({ "knowledge/b.md": "b" });
+    } finally {
+      repo.cleanup();
+    }
   });
 
   it("ui_page links only visible pages, and keeps the app's reads out of the agents' usage log", async () => {
@@ -309,6 +323,45 @@ describe("ui tools: hidden pages don't show, and don't change what is shown (R6)
     expect(edges.length).toBeGreaterThan(0);
     for (const e of edges) expect(ids.has(e.from) && ids.has(e.to), `${e.from} → ${e.to}`).toBe(true);
     expect(edges).toContainEqual({ from: "rb-deploy-prod", to: "adr-0002" });
+  });
+});
+
+describe("ui_overview: its counts agree with its own stale list", () => {
+  it("counts a deprecated page as neither past review nor due soon, as coverage and stale don't", async () => {
+    const acme = copyAcme();
+    cleanups.push(acme.cleanup);
+    // The page this is about: deprecated, visible in local mode, and long past its review date.
+    const legacy = loadRepo(acme.root).byId.get("rb-deploy-legacy")!;
+    expect(legacy).toMatchObject({ status: "deprecated", acl: "internal", owner_team: "platform" });
+    expect(computeSla(legacy.last_verified, legacy.review_every, NOW, 0).state).toBe("overdue");
+
+    const o = await new KnowledgeService(acme.root, fixedIdentity(LOCAL_IDENTITY), () => NOW).uiOverview();
+    const overdue = o.stale.filter((e) => e.reason === "overdue");
+    expect(overdue.map((e) => e.id)).not.toContain("rb-deploy-legacy");
+    expect(o.totals.overdue).toBe(overdue.length);
+    for (const t of o.teams) expect(t.overdue, t.team).toBe(overdue.filter((e) => e.owner_team === t.team).length);
+    expect(o.teams.find((t) => t.team === "platform")).toMatchObject({ pages: 11, overdue: 1 });
+    expect(o.due_soon.map((s) => s.id)).not.toContain("rb-deploy-legacy");
+    expect(o.totals).toMatchObject({ pages: 21, deprecated: 1 }); // still a page, just not one to review
+  });
+
+  it("leaves a deprecated page that's due soon out of the due-soon count, total and list, at any list_limit", async () => {
+    const acme = copyAcme();
+    cleanups.push(acme.cleanup);
+    const file = join(acme.root, "knowledge/runbooks/deploy-legacy.md");
+    writeFileSync(file, readFileSync(file, "utf8").replace("last_verified: 2025-03-01", "last_verified: 2026-08-10"));
+    const legacy = loadRepo(acme.root).byId.get("rb-deploy-legacy")!;
+    expect(legacy.status).toBe("deprecated");
+    expect(computeSla(legacy.last_verified, legacy.review_every, NOW, 14).state).toBe("due_soon"); // due 2026-11-08
+
+    const service = new KnowledgeService(acme.root, fixedIdentity(LOCAL_IDENTITY), () => NOW);
+    for (const args of [{}, { list_limit: 1 }]) {
+      const o = await service.uiOverview(args);
+      expect(o.due_soon.map((s) => s.id), JSON.stringify(args)).not.toContain("rb-deploy-legacy");
+      expect(o.totals.due_soon).toBe(2); // rb-payments-refund-failures and rb-rotate-tls
+      expect(o.due_soon_total).toBe(o.totals.due_soon);
+      expect(o.teams.find((t) => t.team === "platform")).toMatchObject({ due_soon: 1 });
+    }
   });
 });
 

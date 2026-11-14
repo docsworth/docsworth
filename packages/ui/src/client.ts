@@ -35,7 +35,7 @@ export interface ClientOptions {
 type ToolResult = { isError?: boolean; structuredContent?: Record<string, any>; content?: { type: string; text?: string }[] };
 
 const sessionExpired = () =>
-  new DocsworthError("session_expired", "This tab's session with docsworth serve ended (it was idle for 30 minutes, or the server restarted). Reload the page to start a new one.");
+  new DocsworthError("session_expired", "This tab's session with docsworth serve ended (it was idle for 30 minutes, the server restarted, or it was idle longest when the server needed room for another tab). Reload the page to start a new one.");
 
 export class DocsworthClient {
   private session: string | null = null;
@@ -61,7 +61,12 @@ export class DocsworthClient {
       ...(body ? { "content-type": "application/json" } : {}),
       ...(session ? { "mcp-session-id": session, "mcp-protocol-version": PROTOCOL_VERSION } : {}),
     };
-    return fetchImpl(new URL("/mcp", this.opts.url), { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const url = new URL("/mcp", this.opts.url);
+    // The browser's own words for a server that isn't there ("Failed to fetch") tell a person
+    // nothing: say which server didn't answer. The next call tries again.
+    return fetchImpl(url, { method, headers, body: body ? JSON.stringify(body) : undefined }).catch(() => {
+      throw new DocsworthError("unreachable", `No docsworth serve answered at ${url.origin}. Is it running, on that port?`);
+    });
   }
 
   private static async failure(res: Response): Promise<DocsworthError> {
@@ -77,7 +82,7 @@ export class DocsworthClient {
         jsonrpc: "2.0",
         id: ++this.nextId,
         method: "initialize",
-        params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: this.opts.name ?? "docsworth-web", version: "0.2.0" } },
+        params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: this.opts.name ?? "docsworth-web", version: "0.3.0" } },
       });
       if (!res.ok) throw await DocsworthClient.failure(res);
       const session = res.headers.get("mcp-session-id");
@@ -108,7 +113,7 @@ export class DocsworthClient {
    * Calls a tool and returns its structured result, or throws its structured error.
    *
    * The server's taint check is per session, and so per tab (docs/security-model.md). When
-   * the server no longer knows the session (idle for 30 minutes, or restarted), a new one
+   * the server no longer knows the session (idle for 30 minutes, reclaimed for another tab, or restarted), a new one
    * holds none of the reads behind what this tab shows. So a new session is started only
    * while nothing has been shown: a reloaded tab whose kept session had expired. Once a call
    * has been answered, a lost session ends the tab: this call and every later one, writes

@@ -11,6 +11,12 @@ const PALETTE = ["#2b5fa8", "#2f7d4f", "#b7791f", "#8a4fbf", "#b4442c", "#1f8a8a
 
 type Placed = GraphNode & SimulationNodeDatum;
 
+/**
+ * The most pages a graph view asks for (`ui_graph`'s `max_nodes`). Past it, the layout froze
+ * a tab for over two seconds and pinned most of a 2,700-page repo to the frame's edges.
+ */
+export const GRAPH_LIMIT = 150;
+
 export function teamColors(teams: string[]): Map<string, string> {
   return new Map([...new Set(teams)].sort().map((t, i) => [t, PALETTE[i % PALETTE.length]!]));
 }
@@ -21,11 +27,13 @@ export function layout(graph: Graph, width: number, height: number): Placed[] {
   const links = graph.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => ({ source: e.from, target: e.to }));
   const sim = forceSimulation(nodes)
     .force("link", forceLink<Placed, { source: string; target: string }>(links).id((d) => d.id).distance(110))
-    .force("charge", forceManyBody().strength(-520))
+    // Repulsion summed over every page grows with their number: past about 20, it's scaled
+    // down, or most pages end pinned to the frame (115 of 150 were, at a fixed -520).
+    .force("charge", forceManyBody().strength(-520 * Math.min(1, 20 / Math.max(1, nodes.length))))
     .force("collide", forceCollide(36))
-    // Pages with no links would drift to the edge; a gentle pull keeps them in view.
-    .force("x", forceX(width / 2).strength(0.05))
-    .force("y", forceY(height / 2).strength(0.08))
+    // Pages with no links would drift to the edge; a pull keeps them in view.
+    .force("x", forceX(width / 2).strength(0.1))
+    .force("y", forceY(height / 2).strength(0.16))
     .force("center", forceCenter(width / 2, height / 2))
     .stop();
   for (let i = 0; i < 300; i++) sim.tick();
@@ -37,7 +45,11 @@ export function layout(graph: Graph, width: number, height: number): Placed[] {
   return nodes;
 }
 
-export function LinkGraph({ graph, navigate, width = 1000, height = 560 }: { graph: Graph; navigate: Navigate; width?: number; height?: number }) {
+/** Room for each page: past a few dozen, a 560-high frame pinned most of them to its edges. */
+const AREA_PER_NODE = 6000;
+
+export function LinkGraph({ graph, navigate, width = 1000, height: fixed }: { graph: Graph; navigate: Navigate; width?: number; height?: number }) {
+  const height = fixed ?? Math.max(560, Math.ceil((graph.nodes.length * AREA_PER_NODE) / width));
   const placed = useMemo(() => layout(graph, width, height), [graph, width, height]);
   const at = new Map(placed.map((n) => [n.id, n]));
   const colors = teamColors(graph.nodes.map((n) => n.owner_team));

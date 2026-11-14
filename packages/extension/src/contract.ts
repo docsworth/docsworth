@@ -4,6 +4,8 @@
 // Gmail thread's context. Of that, only the subject reaches the server unasked, as the panel's
 // search for related pages; the text goes only in a draft the person submits. The side panel
 // and the options page are extension pages: they read the token and call the server themselves.
+// A saved page or selection isn't a message: capture.js, the extension's own script, reads it
+// in the tab and Chrome hands back its answer, which is checked as strictly (isExtraction).
 
 export const GMAIL_ORIGIN = "https://mail.google.com";
 /** The most text a capture carries, in UTF-8 bytes. */
@@ -16,8 +18,22 @@ export const PENDING_PREFIX = "pending:";
 /** The one message a content script may send: the open thread, read when its button is clicked. */
 export type GmailContext = { kind: "gmail-context"; subject: string; text: string; url: string };
 
+/** Where a capture came from: the Gmail button, or the page's selection or its main content. */
+export type Source = "gmail" | "selection" | "page";
+/** The most a capture's note says (why it's plain text, that it was cut). */
+export const MAX_NOTE = 200;
+
 /** A capture waiting for the side panel of the window it came from. */
-export type Pending = { window: number; source: "gmail" | "selection"; title: string; text: string; url: string; at: number };
+export type Pending = { window: number; source: Source; title: string; text: string; url: string; at: number; note?: string };
+
+/**
+ * What capture.js gives back from a tab (src/extract): markdown of what was shown there, the
+ * page's title and its address. A page shapes its content, so this is checked as it arrives.
+ */
+export type Extraction = { title: string; url: string; markdown: string; cut: boolean };
+/** The name capture.js defines its one function under, in the extension's isolated world. */
+export const CAPTURE_FN = "docsworthCapture";
+export const MAX_URL = 2048;
 
 const bytes = (s: string) => new TextEncoder().encode(s).length;
 
@@ -59,13 +75,37 @@ export function refusal(msg: unknown, sender: chrome.runtime.MessageSender, ownI
   return null;
 }
 
+/** capture.js's answer, checked exactly: these four keys, these types, within the limits. */
+export function isExtraction(v: unknown): v is Extraction {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  if (Object.keys(v).sort().join(",") !== "cut,markdown,title,url") return false;
+  const r = v as Record<string, unknown>;
+  return (
+    typeof r.title === "string" &&
+    r.title.length <= MAX_TITLE &&
+    typeof r.url === "string" &&
+    r.url.length <= MAX_URL &&
+    typeof r.markdown === "string" &&
+    bytes(r.markdown) <= MAX_TEXT_BYTES &&
+    typeof r.cut === "boolean"
+  );
+}
+
+/** capture.js's refusal (nothing selected), as it says it: one short string. */
+export function refusalOf(v: unknown): string | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v) || Object.keys(v).join(",") !== "error") return null;
+  const e = (v as { error: unknown }).error;
+  return typeof e === "string" && e.length <= MAX_NOTE ? e : null;
+}
+
 /** A stored capture, checked as it's read back: the panel trusts nothing it didn't check. */
 export function isPending(v: unknown): v is Pending {
   if (typeof v !== "object" || v === null) return false;
   const r = v as Record<string, unknown>;
   return (
     Number.isInteger(r.window) &&
-    (r.source === "gmail" || r.source === "selection") &&
+    (r.source === "gmail" || r.source === "selection" || r.source === "page") &&
+    (r.note === undefined || (typeof r.note === "string" && r.note.length <= MAX_NOTE)) &&
     typeof r.title === "string" &&
     r.title.length <= MAX_TITLE &&
     typeof r.text === "string" &&

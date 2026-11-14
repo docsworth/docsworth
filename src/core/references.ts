@@ -1,4 +1,8 @@
-import { posix } from "node:path";
+import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join, posix } from "node:path";
+import { type Node, Parser } from "commonmark";
+import { pageLinks, pageRoute } from "./links.js";
 import type { Page, Repo } from "./repo.js";
 
 /**
@@ -268,26 +272,65 @@ export interface PageNames {
   depth: number;
   /** The knowledge repo's URL prefixes on GitHub (`github.com/acme/knowledge/`), if it's there. */
   repoUrls: string[];
+  /** Each page's one route on a docs site (`pageRoute`) → whether it's hidden (hidden wins a shared route). */
+  routes: Map<string, boolean>;
+  /** Hidden pages' paths under the root without `.md`: a link by a file's stem (`sec/1.0-release`). */
+  stems: Set<string>;
+  /** For each loaded page's repo path, the directories its URL reads a relative link from. */
+  urlDirs: Map<string, string[]>;
+  /** `site_url`'s host (port included), path prefix (no trailing slash), host name, and where that name starts a token's URL. */
+  site?: { host: string; prefix: string; name: string; at: RegExp };
+  /** Whether a repo path, as written (not folded), is a file or directory in the repo. */
+  exists: (repoPath: string) => boolean;
   /** The same, folded as rendered text (`foldRendered`), for the rendered view. */
   rendered?: PageNames;
 }
 
 export function pageNames(repo: Repo, hidden: (page: Page) => boolean): PageNames {
-  return { ...buildNames(repo, hidden, fold), rendered: buildNames(repo, hidden, foldRendered) };
+  const exists = existsIn(repo.root);
+  return { ...buildNames(repo, hidden, fold, exists), rendered: buildNames(repo, hidden, foldRendered, exists) };
 }
 
-function buildNames(repo: Repo, hidden: (page: Page) => boolean, fold: (s: string) => string): PageNames {
+/** `exists` for a repo at `root`, memoized: false for a path that leaves it. */
+function existsIn(root: string): (repoPath: string) => boolean {
+  const seen = new Map<string, boolean>();
+  return (repoPath) => {
+    const p = posix.normalize(repoPath);
+    if (p === ".." || p.startsWith("../") || p.startsWith("/")) return false;
+    return memoized(seen, p, () => existsSync(join(root, p)));
+  };
+}
+
+/** The route a page's frontmatter gives it, from its path under the root. */
+const routeOf = (under: string, page: { slug?: string; id?: string }) => pageRoute(under, page.slug, page.id);
+
+function buildNames(repo: Repo, hidden: (page: Page) => boolean, fold: (s: string) => string, exists: (repoPath: string) => boolean): PageNames {
   const root = fold(repo.config.knowledge_root.replace(/\/+$/, ""));
   const paths = new Map<string, boolean>();
   const under = new Map<string, boolean>();
   const names = new Map<number, Set<string>>();
   const spelled = new Map<string, string[]>();
   const spelledUnder = new Map<string, string[]>();
+  const routes = new Map<string, boolean>();
+  const stems = new Set<string>();
+  const urlDirs = new Map<string, string[]>();
   let depth = 0;
   // Pages that didn't load count as hidden: their ACL can't be read.
-  const all: [string, boolean][] = [...repo.pages.map((p): [string, boolean] => [p.path, hidden(p)]), ...repo.invalid.map((p): [string, boolean] => [p.path, true])];
-  for (const [path, isHidden] of all) {
+  const all: [string, boolean, { slug?: string; id?: string }][] = [
+    ...repo.pages.map((p): [string, boolean, Page] => [p.path, hidden(p), p]),
+    ...repo.invalid.map((p): [string, boolean, { slug?: string; id?: string }] => [p.path, true, p]),
+  ];
+  const rawRoot = repo.config.knowledge_root.replace(/\/+$/, "");
+  for (const [path, isHidden, page] of all) {
     const key = fold(path);
+    if (path.startsWith(`${rawRoot}/`)) {
+      // As a docs site serves it: its one route, and a relative link read from its URL,
+      // with and without a trailing slash (a site may serve either).
+      const route = fold(routeOf(path.slice(rawRoot.length + 1), page));
+      routes.set(route, (routes.get(route) ?? false) || isHidden);
+      if (isHidden) stems.add(fold(path.slice(rawRoot.length + 1).replace(/\.md$/, "")));
+      urlDirs.set(key, [posix.dirname(route).replace(/^\.$/, ""), route]);
+    }
     paths.set(key, (paths.get(key) ?? false) || isHidden);
     const rel = key.startsWith(`${root}/`) ? key.slice(root.length + 1) : key;
     if (rel.includes("/")) under.set(rel, (under.get(rel) ?? false) || isHidden);
@@ -301,8 +344,87 @@ function buildNames(repo: Repo, hidden: (page: Page) => boolean, fold: (s: strin
     if (!spelledUnder.has(name)) spelledUnder.set(name, []);
     if (rel !== key && rel.includes("/")) spelledUnder.get(name)!.push(rel);
   }
-  return { root, paths, under, names, spelled, spelledUnder, depth, repoUrls: repoUrls(repo) };
+  return { root, paths, under, names, spelled, spelledUnder, depth, repoUrls: repoUrls(repo), routes, stems, urlDirs, site: siteOf(repo), exists };
 }
+
+/** `site_url`'s host (with any port) and its path prefix without a trailing slash. */
+function siteOf(repo: Repo): PageNames["site"] {
+  const at = repo.config.site_url ? webParse(repo.config.site_url) : undefined;
+  // Where a host can start: not inside another (`www.docs.example.com`).
+  // Every regex metacharacter escaped (code review, round 7: an IPv6 host's brackets).
+  const name = at?.hostname.replace(/\.$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return at && { host: hostOf(at), prefix: fold(decodedPath(at)).replace(/\/+$/, ""), name: at.hostname.replace(/\.$/, ""), at: new RegExp(`(?<![a-z0-9.-])${name}`, "gi") };
+}
+
+/**
+ * The host a URL names, with its port unless it's the scheme's default (the URL parser drops
+ * that), a trailing dot cut. Not the scheme: `http://` to the site's host shows the same
+ * route, so it's the site too. But `www.` and another port are other services (review,
+ * round 4), so they stay.
+ */
+const hostOf = (at: URL) => `${at.hostname.replace(/\.$/, "")}${at.port ? `:${at.port}` : ""}`;
+
+/**
+ * The route a URL names on the docs site (`site_url`), as `/route` (folded); undefined for a
+ * URL elsewhere. The prefix matches at a segment boundary: `/docs` isn't `/docs-archive`.
+ */
+function siteRouteOf(url: string, names: PageNames): string | undefined {
+  if (!names.site) return undefined;
+  const at = webParse(url);
+  if (!at || hostOf(at) !== names.site.host) return undefined;
+  const path = fold(decodedPath(at));
+  const p = names.site.prefix;
+  if (path !== p && !path.startsWith(`${p}/`)) return undefined;
+  return path.slice(p.length) || "/";
+}
+
+/**
+ * Whether URLs that may be one link (a URL read several ways: whole, its trailing
+ * punctuation cut, cut at a parenthesis) name a hidden page on the docs site, or a route
+ * there that names nothing: readings combine as `routeVerdict`'s do.
+ */
+function siteUrlHides(urls: string[], names: PageNames, failClosed = true): boolean {
+  const routes = urls.map((u) => siteRouteOf(u, names)).filter((r): r is string => r !== undefined);
+  if (!routes.length) return false;
+  // The prefix says where the site is, so no `docs/` reading: a route as it stands.
+  const verdict = routeVerdict(routes.map(clean), names);
+  return verdict ?? (failClosed && routes.some(routeShaped));
+}
+
+/** A path clamped at the root (`..` past it stays there, as a browser reads it), without its outer slashes. */
+const clean = (p: string) => posix.normalize(`/${p}`).replace(/^\/+|\/+$/g, "");
+
+/**
+ * Where a docs site serves a link written on page `from` (folded): a root-relative one as its
+ * route, with and without a leading `docs/`; a relative one from the page's URL (`urlDirs`).
+ */
+function routeReadings(path: string, from: string, names: PageNames): string[] {
+  // Each resolved, then any `%2F` left decoded (`slashes`), then read.
+  if (path.startsWith("/")) {
+    const r = clean(slashes(clean(path)));
+    return r === "docs" || r.startsWith("docs/") ? [r, clean(r.slice("docs".length))] : [r];
+  }
+  return (names.urlDirs.get(from) ?? []).map((d) => clean(slashes(clean(posix.join(d, path)))));
+}
+
+/**
+ * What route readings name. A hidden page's route by any reading: true. Else a visible
+ * page's by any: false, kept. Else a hidden page's file stem, by those readings or `more`
+ * (the path in the repo, under the root): true. Else undefined: nothing.
+ */
+function routeVerdict(readings: string[], names: PageNames, more: string[] = []): boolean | undefined {
+  let visible = false;
+  for (const r of readings) {
+    const hidden = names.routes.get(r);
+    if (hidden) return true;
+    if (hidden === false) visible = true;
+  }
+  if (visible) return false;
+  return readings.some((r) => names.stems.has(r)) || more.some((r) => names.stems.has(r)) ? true : undefined;
+}
+
+/** A link a site serves as a page, not a file: no extension (a lone trailing `.` is none), or a trailing `/`. */
+const routeShaped = (path: string) => path.endsWith("/") || posix.extname(path).length <= 1;
 
 /** The knowledge repo's web and raw URL prefixes, when `github.repo` says where it is. */
 function repoUrls(repo: Repo): string[] {
@@ -516,20 +638,120 @@ function readDestination(dest: string, html: boolean): string {
  * Whether a link destination, as written on page `from`, leads to a hidden page: one
  * that resolves to it, or a URL that ends with its path. A path under the knowledge root
  * that is no loaded page fails closed: a page that didn't load has no trustworthy ACL.
- * `html` for an attribute in raw HTML, where backslash escapes don't apply.
+ * `html` for an attribute in raw HTML, where backslash escapes don't apply. `links`, the
+ * text's CommonMark links (`linkPaths`): a route naming nothing fails closed only where it's
+ * one of them (or an attribute's), not where only the liberal reading finds it (`[^1]: The
+ * note`, `[term]: word`); a hidden page's route hides it wherever it stands.
  */
-export function destinationHides(dest: string, from: string, names: PageNames, html = false): boolean {
+export function destinationHides(dest: string, from: string, names: PageNames, html = false, links?: ReadonlySet<string>): boolean {
   let d = dest.trim();
   if (!html && d.startsWith("<") && d.endsWith(">")) d = d.slice(1, -1);
   const path = readDestination(d, html);
   if (!path) return false;
   const fromKey = fold(from);
-  if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(path)) return namesHidden([path], fromKey, names) || namesNoPage(decodeText(d, !html), names, !html);
-  const resolved = path.startsWith("/") ? posix.normalize(path.slice(1)) : posix.normalize(posix.join(posix.dirname(fromKey), path));
+  // Where a browser goes, too: in markdown, CommonMark's reading (`x&#46md` is no reference
+  // without its `;`, so its `#` starts a fragment and the link is to `x&`); in an attribute,
+  // HTML's (`&#` then a line break is no reference either). The liberal reading (`x.md`)
+  // still hides wherever it names a hidden page; a route naming nothing fails closed only by
+  // the browser's reading of a link CommonMark parses (`links`), or of an attribute. And
+  // only for routes: a `.md` the browser's reading finds no page (`..\x.md`, whose `\` a
+  // renderer writes as `%5C`) is the liberal reading's to judge, as before.
+  // (A markdown destination's `\` reaches the href as `%5C`, which a browser keeps.)
+  const cm = commonmarkPath(html ? decodeText(d, false).replace(/\\/g, "/") : decodeText(d, true, true).replace(/\\/g, "%5C"));
+  // Another reading where it differs (`/%2Fgithub.com/x` is a path, kept so: the liberal
+  // reading's `//github.com/x` is a URL).
+  const other = cm.folded && cm.folded !== path ? cm : undefined;
+  const confirmed = (p: string) => html || !links || links.has(p);
+  const byCommonMark = () =>
+    !!other && (other.url ? urlHides(other.cased, fromKey, names, false, confirmed(other.folded)) : readingHides(other.folded, fromKey, names, confirmed(other.folded) ? repoPathOf(other.cased, from) : undefined, false));
+  // `%2F` as written: a hidden page that way hides it; naming nothing doesn't.
+  if (isUrlPath(path)) return urlHides(decodeText(d, !html), fromKey, names, html, confirmed(cm.folded), path) || byCommonMark();
+  return readingHides(path, fromKey, names, !other && confirmed(path) ? writtenPath(d, html, from) : undefined) || byCommonMark();
+}
+
+const isUrlPath = (p: string) => /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(p);
+
+/**
+ * Whether a URL (decoded) names a hidden page: on the docs site, by its path's tail, or one
+ * into the repo naming no page. `link` if it's a link (`destinationHides`'s `links`): then a
+ * route on the docs site naming nothing fails closed too.
+ */
+function urlHides(url: string, fromKey: string, names: PageNames, html: boolean, link: boolean, path = readDestination(url, true)): boolean {
+  return siteUrlHides([url], names, link) || namesHidden([path], fromKey, names) || namesNoPage(url, names, !html);
+}
+
+/**
+ * Whether one reading of a destination (folded, not a URL) hides a page. `failClosed`, the
+ * reading as written in the repo when it may fail closed: then a route naming nothing does,
+ * unless it's a file or directory in the repo outside the knowledge root (`/src`), a link
+ * to that, which hides no page. `liberal` for the liberal reading, which alone reads a `.md`
+ * under the root that is no page, and a hidden page's path at the end of another, as hiding.
+ */
+function readingHides(path: string, fromKey: string, names: PageNames, failClosed?: string, liberal = true): boolean {
+  // Resolved first, then any `%2F` left decoded (`commonmarkPath`).
+  const resolved = slashes(path.startsWith("/") ? posix.normalize(path.slice(1)) : posix.normalize(posix.join(posix.dirname(fromKey), path)));
   const known = names.paths.get(resolved);
   if (known !== undefined) return known;
-  return (resolved.startsWith(`${names.root}/`) && resolved.endsWith(".md")) || namesHidden([path], fromKey, names);
+  const underRoot = resolved === names.root || resolved.startsWith(`${names.root}/`);
+  if (liberal && underRoot && resolved.endsWith(".md")) return true;
+  // As a docs site serves it (the owner's decision, 2026-11-13): a hidden page's route, or
+  // its file's stem, hides it; a visible page's route keeps it.
+  const route = routeVerdict(routeReadings(path, fromKey, names), names, underRoot ? [resolved.slice(names.root.length + 1)] : []);
+  if (route || (liberal && namesHidden([path], fromKey, names))) return true;
+  if (route === false || failClosed === undefined) return false;
+  return routeShaped(slashes(path)) && (underRoot || !names.exists(slashes(failClosed)));
 }
+
+/**
+ * A destination CommonMark has decoded (its references and escapes) as a path: cut at its
+ * query or fragment, then percent-decoded. `folded` as the sweep compares paths, `cased` as
+ * written in the repo. `url` if it's a URL, told before decoding, as a browser tells it:
+ * `/%2Fgithub.com/x` is a path, not `//github.com/x`.
+ */
+function commonmarkPath(dest: string): { folded: string; cased: string; url: boolean } {
+  const raw = dest.replace(/[\t\n\r]/g, "").trim();
+  const url = isUrlPath(raw);
+  // A browser resolves `..` before it decodes: `%2F` is no separator then (`zz%2F..` is one
+  // segment, and `..` climbs out of it only), so it stays as written until the path is
+  // resolved (`readingHides`); `%2e` is a dot to WHATWG URL, so it's decoded.
+  const cased = (url ? raw : raw.split(/[?#]/)[0]!.split(/%2f/i).map(percentDecoded).join("%2F")).normalize("NFC").trim();
+  return { folded: fold(cased).trim(), cased, url };
+}
+
+/**
+ * A path a browser resolved with `%2F` kept, as a server reads it: decoded, then its dot
+ * segments resolved again (`a/..%2Fb` is `b`). Unchanged where it holds no `%2F`.
+ */
+const slashes = (p: string) => (/%2f/i.test(p) ? posix.normalize(p.replace(/%2f/gi, "/")) : p);
+
+const percentDecoded = (s: string) =>
+  s.replace(/(?:%[0-9a-f]{2})+/gi, (seq) => {
+    try {
+      return decodeURIComponent(seq);
+    } catch {
+      return seq;
+    }
+  });
+
+/** The paths of `text`'s links and images, as commonmark.js parses them (`commonmarkPath`). */
+export function linkPaths(text: string): Set<string> {
+  const out = new Set<string>();
+  if (!text.includes("]") && !text.includes("<")) return out; // a link has a `]`, an autolink a `<`
+  for (const dest of pageLinks(text)) {
+    const { folded } = commonmarkPath(dest);
+    if (folded) out.add(folded);
+  }
+  return out;
+}
+
+/** A destination as a repo path, with its case and characters as written (for `exists`). */
+function writtenPath(d: string, html: boolean, from: string): string {
+  let t = percentDecoded(decodeText(d, !html).replace(/[\t\n\r]/g, "").split(/[?#]/)[0]!);
+  if (html) t = t.replace(/\\/g, "/"); // a browser reads `\` as `/` in raw HTML
+  return repoPathOf(t.normalize("NFC").trim(), from);
+}
+
+const repoPathOf = (t: string, from: string) => (t.startsWith("/") ? posix.normalize(t.slice(1)) : posix.normalize(posix.join(posix.dirname(from), t)));
 
 /**
  * The lines of `text` holding a link destination that `destinationHides` refuses, read
@@ -540,12 +762,12 @@ export function destinationHides(dest: string, from: string, names: PageNames, h
  * page fails closed in every form, as it does in the common ones (merge gate, PR 13:
  * `[a [b] c](../security/not-loaded.md)` was kept).
  */
-function destinationLines(text: string, from: string, names: PageNames, bases: string[] = []): Set<number> {
+function destinationLines(text: string, from: string, names: PageNames, bases: string[] = [], links?: ReadonlySet<string>): Set<number> {
   const marked = new Set<number>();
   for (const d of destinations(text)) {
     // As written, and as a browser resolves it against each `<base href>` (merge gate, PR
     // 13: `<base href="../security/">` then `<a href="x.md">` is the hidden page's link).
-    const hides = destinationHides(d.dest, from, names, d.html) || bases.some((b) => {
+    const hides = destinationHides(d.dest, from, names, d.html, links) || bases.some((b) => {
       const r = againstBase(b, d.dest, d.html, from);
       return r !== undefined && destinationHides(r, from, names, true);
     });
@@ -554,8 +776,153 @@ function destinationLines(text: string, from: string, names: PageNames, bases: s
   return marked;
 }
 
-/** A destination as written, whether it's an HTML attribute's, and the lines it spans. */
-type Destination = { dest: string; html: boolean; lines: [number, number] };
+/** `marked`, and the lines holding a reference to a definition on a marked line: whatever took its line, it goes. */
+function withLabels(text: string, marked: Set<number>, gone?: Set<string>): Set<number> {
+  if ((!marked.size || !text.includes("]:")) && !gone?.size) return marked;
+  // Any line it spans: its destination may stand on the line after its label.
+  const spans = (d: Destination) => Array.from({ length: d.lines[1] - d.lines[0] + 1 }, (_, k) => d.lines[0] + k).some((l) => marked.has(l));
+  const going = destinations(text).filter((d) => d.label !== undefined && spans(d));
+  // A label goes when the definition CommonMark puts in effect for it goes (code review,
+  // round 9): with the going lines replaced, as they will be, its definition changes or is
+  // gone. Not for a `]:` inside a paragraph, which defines nothing, nor for a later
+  // definition of a label in effect elsewhere. Where commonmark.js doesn't say, every one.
+  let labels = going.map((d) => d.label!);
+  if (labels.length) {
+    const before = definitionsIn(text);
+    const lines = new Set<number>();
+    for (const d of going) for (let l = d.lines[0]; l <= d.lines[1]; l++) lines.add(l);
+    const after = before && definitionsIn(replaceLines(text, lines, "[restricted page]"));
+    if (before && after) {
+      labels = labels.filter((label) => {
+        const was = before.get(normalLabel(label));
+        return was !== undefined && after.get(normalLabel(label)) !== was;
+      });
+    }
+  }
+  // Its references go, and those of the labels the first pass took the definitions of
+  // (`gone`). Every other definition of the label goes with them (`labelLines`), so none
+  // takes effect in a later pass.
+  for (const l of labelLines(text, [...labels, ...(gone ?? [])])) marked.add(l);
+  return marked;
+}
+
+/**
+ * CommonMark's link definitions in `text`, the first for each label (keyed as `normalLabel`
+ * keys a label) → its destination; undefined where commonmark.js doesn't say.
+ */
+export function definitionsIn(text: string): Map<string, string> | undefined {
+  if (!text.includes("]:")) return new Map();
+  const parser = new Parser();
+  parser.parse(text);
+  const refmap = (parser as unknown as { refmap?: Record<string, { destination?: string }> }).refmap;
+  if (!refmap || typeof refmap !== "object") return undefined;
+  return new Map(Object.entries(refmap).map(([label, d]) => [label, d.destination ?? ""]));
+}
+
+/**
+ * The lines of `text` holding a reference to one of `labels` (definitions that go): left, a
+ * reference shows its label as text, in whatever container (code review, round 1: `> [HSM]`
+ * over `> [HSM]: …`), or before a `:` (`[ref]:` that can't start a definition is one).
+ * Matched as CommonMark matches labels (case, runs of space, and space inside the brackets
+ * aside), anywhere on a line.
+ */
+export function labelLines(text: string, labels: Iterable<string>): Set<number> {
+  const marked = new Set<number>();
+  const wanted = [...new Set([...labels].map(normalLabel).filter(Boolean))];
+  if (!wanted.length || !text.includes("[")) return marked;
+  const isWanted = new Set(wanted);
+  // The candidates: each bracketed span holding a label (a label holds no unescaped bracket,
+  // but may hold an escaped one: `[a\\]b]`), found on the text joined as a paragraph reads
+  // it, so a label wrapped across lines is one, and placed back in the text as written.
+  // Not one an odd run of backslashes escapes: it opens nothing (`\\[`, not `\\\\[`).
+  const lines = text.split("\n");
+  const lineStart: number[] = [];
+  for (let o = 0, i = 0; i < lines.length; o += lines[i]!.length + 1, i++) lineStart.push(o);
+  const { t, starts } = joins(lines)[0]!;
+  const cut = (i: number) => lines[i]!.length - ((i + 1 < starts.length ? starts[i + 1]! : t.length) - starts[i]! - 1);
+  // A full reference (`[text][label]`) is one reference from its text's `[`: its token goes
+  // there, so the reference stays whole, and its lines run from its text to its label
+  // (merge gate, PR 53, round 2: the text wrapped to the line before kept showing). Its
+  // text may hold brackets of its own, balanced (round 3: `[HSM rotation [draft] details]`),
+  // so each `]` is matched to its `[` as they nest, escapes aside: one pass. A label after a
+  // `]` with no `[` to match (one a code span holds, say) gets no token, and its reference
+  // takes its whole block.
+  const opener = new Map<number, number>();
+  const open: number[] = [];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] === "\\") i++;
+    else if (t[i] === "[") open.push(i);
+    else if (t[i] === "]" && open.length) opener.set(i, open.pop()!);
+  }
+  const closes = (i: number) => {
+    let slashes = 0;
+    while (t[i - slashes - 1] === "\\") slashes++;
+    return t[i] === "]" && slashes % 2 === 0;
+  };
+  const candidates = new Map<number, [number, number]>();
+  for (const m of t.matchAll(/\[((?:[^[\]\\]|\\[^]){0,999})\]/g)) {
+    if (!isWanted.has(normalLabel(m[1]!))) continue;
+    const from = closes(m.index - 1) ? opener.get(m.index - 1) : m.index;
+    if (from === undefined) continue;
+    const a = lineAt(starts, from);
+    const at = lineStart[a]! + cut(a) + (from - starts[a]!);
+    let slashes = 0;
+    while (text[at - slashes - 1] === "\\") slashes++;
+    if (text[at] !== "[" || slashes % 2 !== 0) continue;
+    // A later label at the same `[` (`[ref][ref]`) ends later: its lines run further.
+    candidates.set(at, [a, lineAt(starts, m.index + m[0].length - 1)]);
+  }
+  // Read once, whole, as CommonMark reads it (merge gate, PR 53: on its own a line loses a
+  // code span opened on the line before): probe definitions for the labels, put first so
+  // they win over any left in the text, and a token before each candidate, which changes
+  // nothing CommonMark reads of a reference (letters and digits, before a `[`). Each link to
+  // a probe (round 5: not an inline link whose text is the label) is the candidate whose
+  // token stands right before it: its lines go. One with none (written some other way)
+  // takes its whole block. A reference image is one (merge gate, PR 53): with a token after
+  // its `!`, it reads as a link. So does a definition of the label, whose line no longer
+  // starts with `[`: it goes too, so no other definition of the label takes effect later.
+  // Absent from the text, short, and not one a page can be written to hold: a random 64-bit
+  // nonce, as `linkSpans` takes (merge gate, PR 53, round 2: growing one a `q` at a time
+  // until absent was quadratic). One scan, again only on a collision.
+  let nonce: string;
+  do nonce = `z${randomBytes(8).toString("hex")}q`;
+  while (text.includes(nonce));
+  const order = [...candidates.keys()].sort((x, y) => x - y);
+  let tokened = "";
+  let from = 0;
+  order.forEach((at, k) => {
+    tokened += `${text.slice(from, at)}${nonce}${k}x`;
+    from = at;
+  });
+  tokened += text.slice(from);
+  const head = wanted.length + 1; // the probes' lines and a blank one
+  const token = new RegExp(`${nonce}(\\d+)x$`);
+  const walker = new Parser().parse(`${wanted.map((label, i) => `[${label}]: ${PROBE}${i}`).join("\n")}\n\n${tokened}`).walker();
+  for (let e = walker.next(); e; e = walker.next()) {
+    const n = e.node;
+    // An image too: one that got no token stays one (Codex, PR 54: `![HSM \`]\` …][ref]`),
+    // and with no token before it, it takes its block.
+    if (!e.entering || (n.type !== "link" && n.type !== "image") || !n.destination?.startsWith(PROBE)) continue;
+    const k = n.prev?.type === "text" ? token.exec(n.prev.literal ?? "")?.[1] : undefined;
+    const span = k === undefined ? undefined : candidates.get(order[Number(k)]!);
+    if (span) {
+      for (let l = span[0]; l <= span[1]; l++) marked.add(l);
+      continue;
+    }
+    let b: Node | null = n;
+    while (b && !b.sourcepos) b = b.parent;
+    if (b?.sourcepos) for (let l = Math.max(b.sourcepos[0][0] - 1 - head, 0); l <= b.sourcepos[1][0] - 1 - head; l++) marked.add(l);
+  }
+  return marked;
+}
+
+const PROBE = "https://label.invalid/";
+
+/** A label as CommonMark compares labels: runs of space one space, case folded as Unicode folds it (`ß` is `SS`: code review, round 2). */
+export const normalLabel = (s: string) => s.replace(/[ \t\r\n]+/g, " ").trim().toLowerCase().toUpperCase();
+
+/** A destination as written, whether it's an HTML attribute's, the lines it spans, and a definition's label. */
+type Destination = { dest: string; html: boolean; lines: [number, number]; label?: string };
 
 /** Every destination in `text`, wherever one can stand (see `destinationLines`). */
 function destinations(text: string): Destination[] {
@@ -564,11 +931,22 @@ function destinations(text: string): Destination[] {
   for (const { t, starts, raw } of joins(text.split("\n"))) {
     const span = (i: number, j: number): [number, number] => [lineAt(starts, i), lineAt(starts, Math.max(i, j - 1))];
     for (const opener of raw ? [] : ["](", "]:"]) {
+      // The last `[` before a definition's `]:`, found going forward (linear): its label.
+      let open = -1;
+      let scanned = 0;
       for (let i = t.indexOf(opener); i >= 0; ) {
         // Read no further than the next opener, so no stretch is read twice.
         const next = t.indexOf(opener, i + 2);
         const [s, e] = destinationAt(t, i + 2, next < 0 ? t.length : next, opener === "](");
-        if (e > s) out.push({ dest: t.slice(s, e), html: false, lines: span(i, e) });
+        if (opener === "]:") {
+          // Not an escaped one: `[a\\[b]: …` is the label `a\\[b`. (CommonMark then says
+          // whether it's a definition at all: `withLabels`.)
+          for (; scanned < i; scanned++) if (t[scanned] === "[" && t[scanned - 1] !== "\\") open = scanned;
+        }
+        // A definition's label (CommonMark's at most 999 characters): what a reference to it
+        // holds, which goes with it.
+        const label = opener === "]:" && open >= 0 && i - open <= 1000 ? { label: t.slice(open + 1, i) } : {};
+        if (e > s) out.push({ dest: t.slice(s, e), html: false, lines: span(i, e), ...label });
         i = next;
       }
     }
@@ -865,27 +1243,40 @@ const READINGS = 8;
  * Without a scheme it's read as one written in text (`github.com/acme/…`).
  */
 function webUrl(url: string): { host: string; path: string } | undefined {
+  const at = webParse(url);
+  return at && { host: at.hostname.replace(/\.$/, "").replace(/^www\./, ""), path: decodedPath(at).toLowerCase() };
+}
+
+/** A web URL parsed as a browser parses it (`webUrl`), or undefined. */
+function webParse(url: string): URL | undefined {
   // A URL parser drops tabs and line breaks first, wherever they are (`h` + break + `ttps:`).
   const u = url.replace(/[\t\n\r]/g, "").trim();
   try {
     const at = new URL(/^[a-z][a-z0-9+.-]*:/i.test(u) ? u : `https://${u.replace(/^[\\/]*/, "")}`);
-    if (at.protocol !== "https:" && at.protocol !== "http:") return undefined;
-    let path = at.pathname;
-    try {
-      path = decodeURIComponent(path);
-    } catch {
-      /* a malformed escape: as written */
-    }
-    return { host: at.hostname.replace(/\.$/, "").replace(/^www\./, ""), path: path.toLowerCase() };
+    return at.protocol === "https:" || at.protocol === "http:" ? at : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** `s` with character references, and with `escapes` CommonMark's backslash escapes, decoded; non-ASCII kept, for a URL parser to read. */
-function decodeText(s: string, escapes: boolean): string {
-  return s.replace(/\\([!-/:-@[-`{-~])|&(?:#(\d+);?|#[xX]([0-9a-fA-F]+);?|([A-Za-z][A-Za-z0-9]{0,31});)/g, (m, esc?: string, dec?: string, hex?: string, name?: string) => {
+/** A parsed URL's path, percent-decoded (as written where an escape is malformed). */
+function decodedPath(at: URL): string {
+  try {
+    return decodeURIComponent(at.pathname);
+  } catch {
+    return at.pathname;
+  }
+}
+
+/**
+ * `s` with character references, and with `escapes` CommonMark's backslash escapes, decoded;
+ * non-ASCII kept, for a URL parser to read. With `strict`, as CommonMark decodes them: a
+ * numeric reference needs its `;` (HTML reads `&#46` in an attribute as `.`).
+ */
+function decodeText(s: string, escapes: boolean, strict = false): string {
+  return s.replace(/\\([!-/:-@[-`{-~])|&(?:#(\d+)(;?)|#[xX]([0-9a-fA-F]+)(;?)|([A-Za-z][A-Za-z0-9]{0,31});)/g, (m, esc?: string, dec?: string, decEnd?: string, hex?: string, hexEnd?: string, name?: string) => {
     if (esc !== undefined) return escapes ? esc : m;
+    if (strict && (decEnd === "" || hexEnd === "")) return m;
     const code = dec !== undefined ? Number(dec) : hex !== undefined ? Number.parseInt(hex, 16) : undefined;
     if (code !== undefined) return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
     // One for a non-ASCII character this doesn't know stands for it as `fold` does: SUB.
@@ -898,9 +1289,9 @@ function decodeText(s: string, escapes: boolean): string {
  * repo that names no page (`namesNoPage`), however it's written: a bare URL, an autolink,
  * in code. Destinations are `destinationLines`', but a URL needs no link around it.
  */
-function repoUrlLines(text: string, names: PageNames): Set<number> {
+function repoUrlLines(text: string, names: PageNames, links?: ReadonlySet<string>): Set<number> {
   const marked = new Set<number>();
-  if (!names.repoUrls.length) return marked;
+  if (!names.repoUrls.length && !names.site) return marked;
   const lines = text.split("\n");
   const block = text.includes("\\") ? htmlBlockPrefixes(lines) : [];
   // Each line decoded (with CommonMark's escapes, but on a raw HTML block's lines without
@@ -908,23 +1299,117 @@ function repoUrlLines(text: string, names: PageNames): Set<number> {
   // on screen), each with its paths' folding. Then every token that may be a URL is read
   // by the URL parser, which maps a host as a browser does (`ｇithub.com`, `github。com`).
   const readings: [(l: string, i: number) => string, PageNames][] = [[(l, i) => decodeText(l, block[i] === undefined), names]];
+  // And with CommonMark's escapes on a raw HTML block's lines too, as the name sweep reads
+  // both: a reader sees `broken\-route` there as the route `broken-route` (found by the fuzz).
+  if (block.some((p) => p !== undefined)) readings.push([(l) => decodeText(l, true), names]);
   if (names.rendered) for (const show of renderings(text)) readings.push([(l) => decodeText(show(l), true), names.rendered]);
   for (const [read, folded] of readings) {
     lines.forEach((l, i) => {
       if (marked.has(i)) return;
       // Not normalized here: the parser maps a host itself, and NFKC would change a path
       // (`𝔄.md` is `A.md` to it).
-      for (const token of read(l, i).split(/[\s"'<>`|[\]()]+/)) {
-        if (!urlish(token)) continue;
-        if (namesNoPage(token.replace(/[).,;:!*_~]+$/, ""), folded)) {
-          marked.add(i);
-          break;
+      const line = read(l, i);
+      if (folded.repoUrls.length) {
+        for (const token of line.split(/[\s"'<>`|[\]()]+/)) {
+          if (!urlish(token)) continue;
+          if (namesNoPage(token.replace(/[).,;:!*_~]+$/, ""), folded)) {
+            marked.add(i);
+            return;
+          }
         }
       }
+      // And percent-decoded, as a hidden page's path is read in text (`…%2Fdocs/moved%2Fsecret`):
+      // there a hidden page's route hides it, naming nothing doesn't (no link reads it so).
+      if (folded.site && (siteUrlsHide(line, folded, links) || (line.includes("%") && siteUrlsHide(percentDecoded(line), folded, NO_LINKS)))) marked.add(i);
     });
   }
   return marked;
 }
+/**
+ * Whether a line names a hidden page by a URL on the docs site, however it's written: an
+ * autolink, a bare URL, in code. Each URL is read whole to the next space, quote or `<` (a
+ * slug may hold `(old)` or end in `_`: review, round 4), and cut at a parenthesis, bracket
+ * or `|`; each such reading also as GFM ends a bare URL (a sentence's `.` cut, a `)` only
+ * while unpaired), the two read together. A route naming nothing fails closed only where it's a link CommonMark
+ * reads (`links`, an autolink): a bare URL's or a piece's could be cut short by markup.
+ */
+function siteUrlsHide(line: string, names: PageNames, links?: ReadonlySet<string>): boolean {
+  // As GFM ends a bare URL: trailing punctuation, and a `)` only while unpaired, so
+  // `…/setup(old))` is `…/setup(old)`.
+  // One pass from the end (code review, round 5: cutting one `)` at a time was quadratic).
+  const paired = (t: string) => {
+    let closes = 0;
+    for (const c of t) closes += c === ")" ? 1 : c === "(" ? -1 : 0;
+    let end = t.length;
+    for (; end > 0; end--) {
+      const c = t[end - 1]!;
+      if (c === ")" && closes > 0) closes--;
+      else if (!".,;:!?*_~".includes(c)) break;
+    }
+    return t.slice(0, end);
+  };
+  for (const wide of line.split(/[\s"'<>`]+/)) {
+    for (const piece of new Set([wide, ...wide.split(/[|[\]()]+/)])) {
+      // And from every place the site's host starts one: after a scheme a browser can't
+      // parse (`https:%2F/docs.example.com/…`), or inside an archive's URL, even after the
+      // host stood once already (code review, round 4), it's still the site's URL. Past a
+      // few such places it fails closed, as a repo URL's readings do: linear.
+      // The places a host starts: as written, or wherever one can (the token's start, after a
+      // separator a URL holds before a host) and a URL parser reads the site's there, mapped
+      // as it maps one: percent-encoded, fullwidth, IDNA's dots, what IDNA ignores (code
+      // review, rounds 7 and 8: `https://ｄｏｃｓ.example.com/…`, `web/docs%2eexample.com/…`
+      // inside an archive's URL). Past eight places (round 6: places, not the readings each
+      // gives) it fails closed.
+      const places = new Set([...piece.matchAll(names.site!.at)].map((m) => m.index));
+      // Parsed only where the pattern can't see a host: one percent-encoded or not in ASCII
+      // (an ASCII one it finds at the same places, in any case). Where each position's
+      // authority ends, found in one pass from the end: linear.
+      if (/[%\u0080-\uffff]/.test(piece)) {
+        const stop = new Int32Array(piece.length + 1).fill(piece.length);
+        for (let k = piece.length - 1; k >= 0; k--) stop[k] = "/\\?#".includes(piece[k]!) ? k : stop[k + 1]!;
+        for (const m of piece.matchAll(/(?:^|[\/\\=?&:@(])(?=[^\/\\=?&:@(])/g)) {
+          const at = m.index + m[0].length;
+          if (stop[at]! - at <= HOST_LENGTH && /[%\u0080-\uffff]/.test(piece.slice(at, stop[at])) && hostAt(piece, at, stop[at]) === names.site!.name) places.add(at);
+        }
+      }
+      if (places.size > HOST_READINGS) return true;
+      // From each: the host, and the scheme before its `//`, which says what port is its
+      // default (`HTTP://…:80`). Past any userinfo to that `//` (merge gate, PR 53, round 3:
+      // `http://user@docs.example.com:80/…`): a host after an `@` starts at its authority's
+      // start, where the last `/`, `\`, `?` or `#` before it ends. At most eight places: linear.
+      const starts: number[] = [];
+      for (const at of places) {
+        starts.push(at);
+        let from = at;
+        if (piece[at - 1] === "@") while (from > 0 && !"/\\?#".includes(piece[from - 1]!)) from--;
+        if (from < 2 || !/[\\/]{2}/.test(piece.slice(from - 2, from))) continue;
+        const scheme = /[a-z][a-z0-9+.-]*:$/i.exec(piece.slice(Math.max(0, from - 34), from - 2));
+        if (scheme && from - 2 > scheme[0].length) starts.push(from - 2 - scheme[0].length);
+      }
+      for (const u of [piece, ...starts.map((at) => piece.slice(at))]) {
+        if (urlish(u) && siteUrlHides([u, paired(u)], names, !links || links.has(commonmarkPath(u).folded))) return true;
+      }
+    }
+  }
+  return false;
+}
+
+const HOST_READINGS = 8;
+const HOST_LENGTH = 320;
+
+const NO_LINKS: ReadonlySet<string> = new Set();
+
+/** The host name starting at `at` in `s`, as a URL parser decodes it (to the next `/`, `\`, `?` or `#`; userinfo and port cut). Linear: it stops at the next separator. */
+function hostAt(s: string, at: number, stopAt?: number): string {
+  let end = stopAt ?? at;
+  // No host is longer than DNS allows (253, a port and userinfo aside): linear, however
+  // many places are tried.
+  if (stopAt === undefined) while (end < s.length && !"/\\?#".includes(s[end]!)) if (++end - at > HOST_LENGTH) return "";
+  const authority = s.slice(at, end);
+  const at2 = webParse(`https://${authority.slice(authority.lastIndexOf("@") + 1)}/`);
+  return at2 ? at2.hostname.replace(/\.$/, "") : "";
+}
+
 /**
  * Whether a token may be a URL with a path, for the URL parser to read: it has a scheme,
  * or its first part (past any slashes, as in `//github.com/…`) looks like a host and a
@@ -1116,14 +1601,17 @@ type Show = (line: string) => string;
 const renderings = (text: string): Show[] => (SHORTER.test(text) ? [unshown, (l) => unshown(l, true)] : [unshown]);
 
 /** The lines of `text`, on page `from`, that name a hidden page: see the module comment. */
-export function namingLines(text: string, from: string, names: PageNames, depth = 0, inherited: string[] = []): Set<number> {
+export function namingLines(text: string, from: string, names: PageNames, depth = 0, inherited: string[] = [], liberal = false, gone?: Set<string>): Set<number> {
   // Destinations and URLs into the repo first, even with nothing hidden: one that names
   // no page fails closed. A srcdoc is a document of its own, with its parent's bases.
   const bases = [...inherited, ...basesIn(text)];
-  const marked = destinationLines(text, from, names, bases);
-  for (const l of repoUrlLines(text, names)) marked.add(l);
+  // A srcdoc is HTML: there only an attribute is a link.
+  // `liberal`: every route naming nothing fails closed, as if each were a link.
+  const links = depth === 0 ? linkPaths(text) : new Set<string>();
+  const marked = destinationLines(text, from, names, bases, liberal ? undefined : links);
+  for (const l of repoUrlLines(text, names, liberal ? undefined : depth === 0 ? links : new Set())) marked.add(l);
   for (const l of srcdocLines(text, depth, (doc) => namingLines(doc, from, names, depth + 1, bases).size > 0)) marked.add(l);
-  if (!names.names.size) return marked;
+  if (!names.names.size) return withLabels(text, marked, gone);
   const lines = text.split("\n");
   const fromKey = fold(from);
   // Read with CommonMark's escapes and without (as raw HTML reads `\`); the same text
@@ -1140,7 +1628,7 @@ export function namingLines(text: string, from: string, names: PageNames, depth 
   if (names.rendered) {
     for (const show of renderings(text)) scan(encoded ? readerView(lines, false, true, show) : plainView(lines, false, show), foldRendered(from), names.rendered, marked);
   }
-  return marked;
+  return withLabels(text, marked, gone);
 }
 
 /**

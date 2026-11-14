@@ -1,6 +1,7 @@
 import "@docsworth/ui/theme.css";
 import { DocsworthClient } from "@docsworth/ui";
 import { render } from "preact";
+import { extract, pendingFrom } from "../capture.js";
 import { PENDING_PREFIX } from "../contract.js";
 import { donePending, takePending } from "../pending.js";
 import { loadSettings, sessionKey } from "../settings.js";
@@ -61,6 +62,13 @@ async function main() {
             await chrome.storage.session.remove(key);
             location.reload();
           })();
+        },
+        // This window's active tab, read where the toolbar click (or a menu click) gave the
+        // extension activeTab; anywhere else Chrome refuses, and the panel says how to allow it.
+        capture: async (mode) => {
+          const [tab] = await chrome.tabs.query({ active: true, windowId });
+          if (tab?.id === undefined) throw new Error("there's no tab to read in this window");
+          return pendingFrom(await extract(chrome, { tabId: tab.id, frameId: 0 }, mode), { window: windowId, source: mode, at: Date.now() });
         },
         extensionId: chrome.runtime.id,
       }}

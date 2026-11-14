@@ -72,6 +72,23 @@ bypass the filter:
 - **Redacted links:** references from a visible page to a hidden one read
   `[restricted page]` in `read` content and search snippets. The search index is built
   from redacted text, so a hidden page's title in a link can't influence ranking either.
+  A page can't make the placeholder a link: the web app and text snippets read pages
+  through one parse (`src/core/gfm.ts`), which turns any link or image labelled
+  "restricted page" back into the placeholder's text, and any whose label holds the
+  placeholder into its label's text. That covers a definition for it, a `(target)` or
+  `[label]` written right after the link redaction replaced, and a link around it. Nor is
+  the placeholder ever read as a definition, so a redacted `[term](page.md): word` line
+  keeps it. What a page doesn't show (an HTML comment or tag, a cell past its table's
+  width) shows nothing on the web page or in a text snippet, placeholder included; it never
+  names a hidden page either way. Agents reading `read` get the markdown as written.
+  `packages/ui/scripts/fuzz-placeholder.ts` checks that no rendered link shows it.
+  Text snippets (`snippets: "text"`, for the web app) are cut from the same redacted
+  text with its markup taken out. Like a markdown snippet, each is at most 240 characters
+  of a page the caller can see, around the query's words, and a hidden page contributes
+  nothing to it. Without markup those characters hold more words: a team that may search
+  but not `read` (`policy.tools`) sees excerpts either way, never more than 240 characters
+  of a page per result. A text snippet isn't cut to the markdown one's window, because that
+  window can end inside markup, which is what text snippets exist to avoid.
   - **In place:** common links (inline, reference-style with their definitions, and
     quoted HTML `href`s) are replaced alone, and the rest of the line stays.
   - **Then a sweep that fails closed** (`src/core/references.ts`): any line that still
@@ -111,8 +128,75 @@ bypass the filter:
     an attribute or a bare URL in text: a page on another branch never loads here, so its
     ACL can't be read. Other URLs count by the loaded pages they name, since nothing ties
     them to this repo; so do the repo's own when it runs locally, without `github.repo`.
-  - **Over-redaction is rare:** fuzzing (below) redacts about 2 in 1,000 texts that
-    reach only visible pages. That happens with `\.` inside a markdown link (read both as
+  - **Routes, as a docs site serves them** (the owner's decision, 2026-11-13). A link is
+    also read as Docusaurus routes it. Each page has one route:
+    - its `slug`;
+    - else its directory and an `id` other than its file name;
+    - else its path without number prefixes (a category index at its directory: `index`,
+      `README`, or a file named after its directory, by the names as written).
+
+    A real Docusaurus build agrees: Hermes Agent's 334 pages, and test pages for each
+    rule, are served at the routes Docsworth reads them at.
+
+    A hidden page's route, or its file's stem (`sec/1.0-plan`), hides a link to it,
+    wherever a destination stands. A visible page's route keeps one. Where two pages share
+    a route, hidden wins. Pages that didn't load count as hidden, with their `slug`. A
+    relative link is read from the page's URL, with and without a trailing slash; a
+    root-relative one also without a leading `docs/`.
+    - **A route that names nothing fails closed.** A link CommonMark parses (or an
+      attribute) to a route no page has reads `[restricted page]`. So a hidden page whose
+      route can't be read never shows its label, and broken links of that shape read
+      `[restricted page]` too. A docs site's generated pages (`/category/…`, `/tags/…`)
+      are among them. A link to a file or directory in the repo outside the knowledge
+      root (`/src`, `/Makefile`) keeps its label.
+    - **Where a browser goes.** Each destination is read as CommonMark and HTML decode it,
+      too:
+      - `x&#46md` has no reference without its `;`, so its `#` starts a fragment;
+      - a markdown `\` reaches the href as `%5C`, which a browser keeps, so
+        `zz\../../x.md` climbs one directory, not two; `%2F` is no separator either while
+        a browser resolves `..`, and a server then decodes what it's sent and resolves it
+        again;
+      - `/%2Fgithub.com/x` is a path, not a URL.
+
+      A route naming nothing fails closed only by that reading. A hidden page by any
+      reading hides.
+    - **Full URLs to the docs site,** with `site_url` set (`https://docs.example.com/docs/`),
+      are read as the routes they name, wherever they stand: a link, an autolink, a bare
+      URL, in code. The host and port must match (`www.` and another port are other
+      services); the scheme needn't; the prefix matches at a segment boundary. One naming
+      nothing fails closed only as a link: text around a bare URL can cut it short. A URL
+      elsewhere holding one (an archive's copy of a hidden page) counts by the page it
+      names, as one ending in a hidden page's path does. It's read from every place the
+      site's host starts: as written, or wherever a URL parser reads it (percent-encoded,
+      fullwidth, IDNA's dots), and from the text percent-decoded, as a hidden page's path
+      is. Its scheme, found past any userinfo (`http://user@docs.example.com:80/…`), says
+      which port is its default. Past eight places in one token where its host starts, it
+      fails closed.
+    - **Not covered:** a route written in plain text, not as a link or a site URL
+      (`see /vault`), is served as written. A hidden page's file path still goes,
+      wherever it's written.
+    - **Until it's stable.** Replacing a line can change what the rest means (a fence
+      gone, code is markdown), so the sweep runs again until nothing changes. Past three
+      passes, every route naming nothing fails closed.
+  - **A definition that goes takes its references with it.** Whatever removed any line
+    of it, its references go too, text and label, in any container. Left, a reference
+    shows its label as text (`> [HSM]` over `> [HSM]: …`), and a full reference its text.
+    - **CommonMark says which:** a label goes when the definition CommonMark puts in
+      effect for it changes or goes once the lines are replaced, so a `]:` inside a
+      paragraph, which defines nothing, takes no label. Probe definitions for the labels,
+      put first, find the references; an inline link whose text is the label, or the
+      label in code, isn't one.
+    - **Only its lines go:** the lines from a reference's first `[` to its label's `]`. A
+      full reference runs from its text, which may wrap and hold brackets of its own,
+      matched as they nest. Labels are matched as CommonMark matches them (case folded as
+      Unicode folds it, `ß` is `SS`; runs of space; escapes; wrapped across lines).
+      CommonMark confirms each one in a single parse of the whole text, with the probes
+      and a token before each candidate. A reference it reads that no candidate accounts
+      for takes its whole block.
+    - **Every definition of the label goes with it,** so none takes effect in a later
+      pass.
+  - **Over-redaction is rare:** fuzzing (below) redacts about 3 in 1,000 texts that
+    reach only visible pages (or repo paths outside the knowledge root). That happens with `\.` inside a markdown link (read both as
     CommonMark's escape and as raw HTML reads it), with a value broken across lines
     whose next line starts with a hidden page's file name, where markup splits a path
     that a shorter tail of resolves elsewhere, and where a visible path and a hidden one
@@ -134,8 +218,12 @@ bypass the filter:
     redaction against CommonMark's reference parser (commonmark.js): no redacted text may
     hold a link, an `href` or `src`, or a path that reaches a hidden page, as written or
     as a browser shows commonmark.js's HTML (an HTML5 parser, domino). A link to a path
-    under the knowledge root that is no page counts as reaching one.
-  - `scripts/fuzz-acl.ts` runs that longer: 120,000 texts, 0 leaks.
+    under the knowledge root that is no page counts as reaching one. So does a link by a
+    hidden page's route or stem, or to a route naming nothing, by a model of Docusaurus's
+    routing written apart from `src/core` (`test/acl-oracle.ts`), on a docs site whose
+    pages a slug or id moves; and a destination as a browser resolves it (WHATWG URL).
+  - `scripts/fuzz-acl.ts` runs that longer: 120,000 texts as paths and URLs, and 120,000
+    as routes on a docs site, 0 leaks. It fails past 0.5% over-redaction.
   - Every rule of the sweep fails a test when it's deleted.
 
 ## `acl` isn't confidentiality
@@ -211,24 +299,31 @@ no hosted service.
 - **Sessions.** Each tab or extension gets its own MCP session with its own service, so the
   taint check is per tab. A session that saw a team page anywhere, the graph included,
   can't write into a broader page; a fresh session can. At most 16 sessions; idle ones
-  close after 30 minutes.
+  close after 30 minutes. A closed tab never tells the server, so a full server makes room
+  for a new one by closing the session idle longest, never one with a request in flight.
+  All sessions share one load of the repo; taint is each session's own.
 - **The same rules.** The tools are the stdio server's, plus the web app's views
   (`ui_capabilities`, `ui_overview`, `ui_graph`), which exist only on HTTP sessions. The
   views answer to the `list` policy, work over `visiblePages(identity)`, and are audited
   at the JSON-RPC boundary like every tool: a required audit sink that fails withholds
   their answer. The graph has no edge to a hidden page; `has_restricted_links` says a page
-  has one exactly as `read` shows a placeholder for it.
+  has one exactly as `read` shows a placeholder for it. The overview also counts the files
+  under the knowledge root that aren't valid pages, whatever their audience, and names
+  none of them: a count, so a person knows something is missing and runs `docsworth lint`.
+  Anyone this server answers can read the repository's files anyway (the owner's decision,
+  2026-11-12).
 - **The web app.** It keeps the token, and its MCP session id, in that tab's session storage.
   A tab duplicated from it, or opened from it, starts with a copy of that storage, and so
   shares its session and its taint: that is stricter, never looser. When the server no longer
-  knows a tab's session (idle for 30 minutes, or restarted), the tab doesn't carry on in a new
+  knows a tab's session (idle for 30 minutes, reclaimed for another tab, or restarted), the tab doesn't carry on in a new
   one, which would hold none of its taint: every call, a write included, is refused until the
   page reloads and reads its views again. The one exception is a reloaded tab whose kept
   session had expired, which has shown nothing yet. Each view asks only for what it shows (`ui_page` for a page with the ids of the visible
   pages it links to, `ui_graph` for one team or all), so a tab is tainted only by what it
   opened. Page markdown renders through commonmark.js in safe mode after its tree is
   rewritten: images become links (nothing is fetched), relative links route in the app only
-  to visible pages, and only http, https and mailto stay links.
+  to visible pages, and only http, https and mailto stay links. Tables are rebuilt from
+  fixed tags; their cells pass through the same rewriting and safe mode.
 - **The trust boundary is the user's account.** A process running as the same user can
   read the token file, as it can read the user's GitHub token. `serve` adds no access a
   local program of the user's didn't already have.
@@ -248,10 +343,10 @@ The extension (`packages/extension`, Chromium, loaded unpacked) is another clien
   - **Never exposed.** The token is in no URL, message, DOM attribute or log.
   - **The panel's session** is kept per window, and resumed when the panel is opened again.
     When the server no longer knows it, the panel ends as a tab does.
-- **The worker** never calls the server and never sees the token. It opens the panel,
-  leaves the panel a capture in `storage.session`, and removes captures whose time is up.
-  It lists the area's keys and reads only the captures' (`getKeys`, Chrome 130), never the
-  token or a panel's session.
+- **The worker** never calls the server and never sees the token. It opens the panel (on a
+  toolbar click as well), leaves the panel a capture in `storage.session`, and removes
+  captures whose time is up. It lists the area's keys and reads only the captures'
+  (`getKeys`, Chrome 130), never the token or a panel's session.
 - **Captures.** Each is under its own key and names its window. The panel takes only its own
   window's, and shows the text only as form values, never as HTML.
   - **Until the panel is done with it.** A capture stays stored until its draft is a PR or
@@ -267,6 +362,36 @@ The extension (`packages/extension`, Chromium, loaded unpacked) is another clien
     opens one already past its ten minutes. A capture waiting behind the one on screen goes
     with its record. The one on screen stays in that panel until it moves on or closes, since it's the
     draft being written.
+- **Saving a page or a selection.** The extension reads a page only when the person asks.
+  - **When.** A click on "Save page" or "Save selection to Docsworth" in the context menu,
+    or on the panel's Save buttons. Chrome lets the panel read only the tab it was opened
+    on with the toolbar button.
+  - **Where.** In the tab the person clicked in, through `activeTab` and `scripting`. It
+    runs in the selection's frame or the top frame, until that tab moves to another origin.
+    No host access comes with these permissions, so another tab is refused.
+  - **How.** The worker or the panel injects the extension's own `capture.js` into the
+    extension's isolated world, where the page's scripts can't reach it.
+  - **What it keeps.** Only what the person can see:
+    - Dropped: elements hidden by `display`, `visibility`, `opacity` or
+      `content-visibility`; the `hidden` attribute and `aria-hidden`; screen-reader-only
+      clipping; what a closed `<details>` folds away; boxes squeezed to a pixel; boxes, or
+      text, drawn entirely before the page's start (by a position, a transform, a
+      `text-indent` or a margin); fixed boxes outside the viewport; text flattened to
+      nothing, or at `font-size: 0`.
+    - Never copied: scripts, styles, templates, frames, media and form controls.
+    - Images become their alt text. Links become absolute, lose their tracking parameters,
+      and keep only their text unless they're `http`, `https` or `mailto`.
+    - The main content is the page's `main` (or the one `article` in it that holds the
+      h1), else what Readability finds, else the body without the page's navigation. The
+      markdown is cut at 64 KB.
+  - **Not detected.** Text coloured like its background, covered by another element, or
+    pushed past the right or bottom edge of a page that doesn't scroll that far.
+    The person reviews the draft, and its owners review the PR.
+  - **What comes back** (a title, an address, markdown, whether it was cut) is checked for
+    its exact shape and sizes before it's used. It's shown only as form values.
+  - **What a refusal leaves.** Where Chrome won't let the extension read (another origin's
+    frame, the Web Store), the menu falls back to Chrome's plain text of the selection. A
+    page falls back to an empty draft, and either way the panel says why.
 - **What a page can send.** A content script runs inside a page and is only as trustworthy
   as that page. It may send one message, `gmail-context` (a subject, at most 64 KB of text,
   a Gmail address), and the worker accepts it only when all of these hold:
@@ -290,11 +415,14 @@ The extension (`packages/extension`, Chromium, loaded unpacked) is another clien
     nothing.
   - **What it reads.** The capture holds each expanded message's text and its sender's
     name, but not addresses.
-- **No write without a submit.** A capture fills a draft. Nothing is written until the person
-  submits the form, and the draft says that once its PR exists, everyone who can read the
-  repository can read it, whatever its audience. An email captured into a page is
-  disclosed that widely.
-- **Permissions:** `sidePanel`, `storage`, `contextMenus`, `alarms`, host access to
+- **No write without a submit.** A capture fills a draft, or an addition to a page it may
+  already be in. Nothing is written until the person submits the form, and the draft says
+  that once its PR exists, everyone who can read the repository can read it, whatever its
+  audience. An email captured into a page is disclosed that widely.
+  - **A new page** is `status: draft`, so agents can't cite it until its owners make it
+    canonical.
+  - **An addition** is a PR its page's owners review. Its first line names the source.
+- **Permissions:** `sidePanel`, `storage`, `contextMenus`, `alarms`, `activeTab`, `scripting`, host access to
   `127.0.0.1` and `localhost` only, and the content script's match on Gmail.
   - **Nothing exposed.** No web-accessible resources and no external connections.
   - **The pages' CSP** allows scripts from the extension only, and connections only to

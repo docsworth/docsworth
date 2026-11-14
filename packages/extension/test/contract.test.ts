@@ -80,6 +80,9 @@ describe("a stored capture, read back", () => {
   const ok = { window: 3, source: "gmail", title: "t", text: "x", url: THREAD, at: 1 };
   it("is checked field by field", () => {
     expect(isPending(ok)).toBe(true);
-    for (const bad of [{ ...ok, window: "3" }, { ...ok, source: "page" }, { ...ok, title: "t".repeat(301) }, { ...ok, text: "a".repeat(MAX_TEXT_BYTES + 1) }, { ...ok, at: "now" }, null, "x"]) expect(isPending(bad), JSON.stringify(bad)?.slice(0, 80)).toBe(false);
+    // A page's main content, and a note on how it was read, are captures too.
+    expect(isPending({ ...ok, source: "page", note: "Cut at 64 KB" })).toBe(true);
+    expect(isPending({ ...ok, source: "selection", note: "n".repeat(200) })).toBe(true);
+    for (const bad of [{ ...ok, window: "3" }, { ...ok, source: "web" }, { ...ok, note: 1 }, { ...ok, note: "n".repeat(201) }, { ...ok, title: "t".repeat(301) }, { ...ok, text: "a".repeat(MAX_TEXT_BYTES + 1) }, { ...ok, at: "now" }, null, "x"]) expect(isPending(bad), JSON.stringify(bad)?.slice(0, 80)).toBe(false);
   });
 });

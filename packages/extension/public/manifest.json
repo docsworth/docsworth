@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Docsworth",
-  "version": "0.2.0",
-  "description": "Search and read your team's Docsworth pages, and send what you find to them as a draft PR, through docsworth serve on this machine.",
+  "version": "0.3.0",
+  "description": "Search and read your team's Docsworth pages, and save a page or a selection to them as a draft PR, through docsworth serve on this machine.",
   "minimum_chrome_version": "130",
-  "permissions": ["sidePanel", "storage", "contextMenus", "alarms"],
+  "permissions": ["sidePanel", "storage", "contextMenus", "alarms", "activeTab", "scripting"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "side_panel": { "default_path": "sidepanel.html" },

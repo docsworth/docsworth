@@ -77,6 +77,20 @@ describe("stale", () => {
     expect(listStale(repo.pages, repo, NOW, "platform").map((s) => s.id)).toEqual(["rb-scale-cluster"]);
   });
 
+  it("says how long ago each was due, one day or many", () => {
+    const r = makeRepo({
+      ...INDEX,
+      // Due 2026-11-01 and 2026-10-31: one and two days before NOW.
+      "knowledge/one.md": page({ id: "one", last_verified: "2026-08-03" }),
+      "knowledge/two.md": page({ id: "two", last_verified: "2026-08-02" }),
+    });
+    cleanups.push(r.cleanup);
+    expect(listStale(r.pages, r, NOW).map((s) => [s.id, s.detail])).toEqual([
+      ["two", "due 2026-10-31, 2 days ago"],
+      ["one", "due 2026-11-01, 1 day ago"],
+    ]);
+  });
+
   it("reports unowned pages", () => {
     const r = makeRepo({ ...INDEX, "knowledge/x.md": page({ id: "x", owner_team: "payments" }) });
     cleanups.push(r.cleanup);

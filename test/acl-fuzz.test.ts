@@ -7,8 +7,8 @@ import { GitHubClient } from "../src/core/github.js";
 import { LOCAL_IDENTITY } from "../src/core/identity.js";
 import { loadRepo, type Page } from "../src/core/repo.js";
 import { KnowledgeService } from "../src/core/service.js";
-import { body, leaks, type Rng, rng } from "./acl-oracle.js";
-import { FUZZ_IDENTITIES, NO_PAGES, fuzzRepo } from "./acl-fuzz-fixture.js";
+import { body, labelsLeft, leaks, type Rng, rng, routeBody, siteModel } from "./acl-oracle.js";
+import { FUZZ_IDENTITIES, NO_PAGES, NO_ROUTES, REPO_PATHS, fuzzRepo, routeRepo } from "./acl-fuzz-fixture.js";
 import { FakeGitHub } from "./fake-github.js";
 import { acmeOnGitHub, NOW } from "./helpers.js";
 
@@ -44,7 +44,48 @@ describe("link redaction, fuzzed against commonmark.js", () => {
       const out = redactLinks(text, from, repo, who);
       if (leaks(text, from, repo, who).length) {
         reaching++;
-        const left = leaks(out, from, repo, who);
+        const left = [...leaks(out, from, repo, who), ...labelsLeft(text, out, from, repo, who)];
+        if (left.length && missed.length < 3) missed.push(`${from} as [${[...who.teams]}]:\n${text}\n→ ${left.join("; ")}`);
+      } else if (onlyVisible) {
+        clean++;
+        if (out !== text) overRedacted++;
+      }
+    }
+    expect(missed.join("\n---\n")).toBe("");
+    expect(reaching, "the run reached hidden pages").toBeGreaterThan(150);
+    expect(overRedacted / clean, `${overRedacted} of ${clean} texts reaching only visible pages were redacted`).toBeLessThan(0.005);
+  });
+});
+
+// The same on a docs site (the owner's decision, 2026-11-13): links as routes, by slug, id,
+// number prefix and file stem, relative from a page's URL, and as URLs on `site_url` and on
+// services that only look like it. A route naming nothing fails closed; a repo path outside
+// the knowledge root (`/src`) keeps its label, and counts toward over-redaction.
+describe("link redaction of routes, fuzzed against an independent model of Docusaurus", () => {
+  const { repo, cleanup } = routeRepo();
+  afterAll(cleanup);
+
+  it.each([1, 2, 3])("seed %i: no redacted text reaches a hidden page", (seed) => {
+    const r = rng(seed);
+    let reaching = 0;
+    let clean = 0;
+    let overRedacted = 0;
+    const missed: string[] = [];
+    // 6,000 texts, about 2,400 of them reaching only visible pages or repo paths: at the long
+    // run's rate (about 3 in 1,000) that puts the 0.5% bar past sampling noise.
+    for (let i = 0; i < 6000; i++) {
+      const who = FUZZ_IDENTITIES[Math.floor(r() * FUZZ_IDENTITIES.length)]!;
+      const from = repo.pages[Math.floor(r() * repo.pages.length)]!.path;
+      const onlyVisible = r() < 0.5;
+      const site = siteModel(repo, who);
+      // A visible page whose route a hidden one shares is hidden there (hidden wins).
+      const visible = repo.pages.filter((p) => canSee(p, who) && site.routes.get(site.pageUrl.get(p.path)!) === false).map((p) => p.path);
+      const targets = onlyVisible ? [...visible, ...REPO_PATHS.filter((p) => !site.routes.has(p))] : [...repo.pages.map((p) => p.path), ...repo.invalid.map((p) => p.path), ...NO_ROUTES, ...REPO_PATHS];
+      const text = routeBody(r, from, targets, site);
+      const out = redactLinks(text, from, repo, who);
+      if (leaks(text, from, repo, who).length) {
+        reaching++;
+        const left = [...leaks(out, from, repo, who), ...labelsLeft(text, out, from, repo, who)];
         if (left.length && missed.length < 3) missed.push(`${from} as [${[...who.teams]}]:\n${text}\n→ ${left.join("; ")}`);
       } else if (onlyVisible) {
         clean++;

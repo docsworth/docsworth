@@ -1,4 +1,5 @@
-import { HtmlRenderer, Node, Parser } from "commonmark";
+import { HtmlRenderer, Node } from "commonmark";
+import { parseGfm } from "../../../src/core/gfm.js";
 
 // Page markdown is untrusted text written by people. It renders through commonmark.js in
 // safe mode (raw HTML dropped), after the tree is rewritten so that what reaches the page
@@ -9,6 +10,8 @@ import { HtmlRenderer, Node, Parser } from "commonmark";
 //   - only http, https and mailto links stay links; every other scheme becomes its text
 // The server has already replaced links to pages the viewer can't see with
 // `[restricted page]`, which renders as that text.
+// Tables render as GFM tables, which commonmark.js doesn't: see src/core/gfm.ts, the parse
+// this renders from (search's text snippets read it too).
 
 export interface RenderOptions {
   /** The page's repo path, e.g. knowledge/runbooks/deploy-production.md. */
@@ -43,6 +46,12 @@ function textOf(node: Node): string {
   return out;
 }
 
+/** Whether `node` sits inside a link (parseGfm nests links and images at most 32 deep). */
+function insideLink(node: Node): boolean {
+  for (let p = node.parent; p; p = p.parent) if (p.type === "link") return true;
+  return false;
+}
+
 /** Replace `node` with its children, so a link becomes its text. */
 function unwrap(node: Node): void {
   while (node.firstChild) node.insertBefore(node.firstChild);
@@ -65,7 +74,7 @@ function routeFor(destination: string, opts: RenderOptions): string | null {
 }
 
 export function renderMarkdown(markdown: string, opts: RenderOptions): string {
-  const doc = new Parser().parse(markdown);
+  const doc = parseGfm(markdown);
   const links: Node[] = [];
   const images: Node[] = [];
   const walker = doc.walker();
@@ -74,16 +83,21 @@ export function renderMarkdown(markdown: string, opts: RenderOptions): string {
     if (e.node.type === "link") links.push(e.node);
     else if (e.node.type === "image") images.push(e.node);
   }
-  // Images first: each becomes a link (to the same destination) labelled with its alt text.
+  // Images first: each becomes a link (to the same destination) labelled with its alt text,
+  // or, inside a link, that label as text, since a link can't hold another link.
   for (const img of images) {
-    const link = new Node("link");
-    link.destination = img.destination ?? "";
     const label = new Node("text");
     label.literal = `image: ${textOf(img) || img.destination || ""}`;
-    link.appendChild(label);
-    img.insertBefore(link);
+    if (insideLink(img)) {
+      img.insertBefore(label);
+    } else {
+      const link = new Node("link");
+      link.destination = img.destination ?? "";
+      link.appendChild(label);
+      img.insertBefore(link);
+      links.push(link);
+    }
     img.unlink();
-    links.push(link);
   }
   for (const link of links) {
     const dest = (link.destination ?? "").trim();

@@ -92,6 +92,7 @@ export function createMcpServer(
         applies_to: z.string().optional().describe("Only pages that apply to this, e.g. `service:payments`"),
         include_stale: z.boolean().optional().describe("Also return non-citable pages inline, labeled with `gate`"),
         limit: z.number().int().min(1).max(25).optional(),
+        snippets: z.enum(["markdown", "text"]).optional().describe("`text`: snippets as a reader sees the page, without markup. Default `markdown`"),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -210,15 +211,23 @@ export function createMcpServer(
     ));
     registered.set("ui_overview", server.registerTool(
       "ui_overview",
-      { title: "Overview", description: "For the Docsworth web app: counts of the caller's visible pages, by team, with what is due soon and what is stale.", inputSchema: {}, annotations: view },
-      () => after(run(() => service.uiOverview())),
+      {
+        title: "Overview",
+        description: "For the Docsworth web app: counts of the caller's visible pages, by team, with what is due soon and what is stale.",
+        inputSchema: { list_limit: z.number().int().min(1).max(1000).optional().describe("At most this many of each list: the most pressing first") },
+        annotations: view,
+      },
+      (args) => after(run(() => service.uiOverview(args))),
     ));
     registered.set("ui_graph", server.registerTool(
       "ui_graph",
       {
         title: "Link graph",
         description: "For the Docsworth web app: the caller's visible pages and the links between them, or one team's.",
-        inputSchema: { owner_team: z.string().optional().describe("Only this team's pages") },
+        inputSchema: {
+          owner_team: z.string().optional().describe("Only this team's pages"),
+          max_nodes: z.number().int().min(1).max(500).optional().describe("At most this many pages: the most-linked ones"),
+        },
         annotations: view,
       },
       (args) => after(run(() => service.uiGraph(args))),

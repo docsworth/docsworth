@@ -1,7 +1,7 @@
 import type { MirrorPage } from "./mirror-view.js";
 import type { Page, Repo } from "./repo.js";
 import { ACL_INTERNAL } from "./schema.js";
-import { destinationHides, namingLines, type PageNames, pageNames, replaceLines } from "./references.js";
+import { definitionsIn, destinationHides, linkPaths, normalLabel, namingLines, type PageNames, pageNames, replaceLines } from "./references.js";
 
 /**
  * Who is calling. In GitHub mode this comes from the caller's own token, so GitHub's
@@ -58,8 +58,8 @@ const A_CLOSE = /<\/a\s*>/i;
  * path. Anything under the knowledge root that is not a loadable page fails closed: an
  * invalid page has no trustworthy ACL.
  */
-function hidesPage(dest: string, fromPath: string, repo: Repo, who: Identity, html = false): boolean {
-  return destinationHides(dest, fromPath, namesFor(repo, who), html);
+function hidesPage(dest: string, fromPath: string, repo: Repo, who: Identity, html = false, links?: ReadonlySet<string>): boolean {
+  return destinationHides(dest, fromPath, namesFor(repo, who), html, links);
 }
 
 /**
@@ -69,12 +69,19 @@ function hidesPage(dest: string, fromPath: string, repo: Repo, who: Identity, ht
  * definitions, and HTML anchors.
  */
 export function redactLinks(body: string, fromPath: string, repo: Repo, who: Identity): string {
-  const hidden = (dest: string) => hidesPage(dest, fromPath, repo, who);
+  // A route naming nothing fails closed where CommonMark reads a link (references.ts).
+  const links = linkPaths(body);
+  const hidden = (dest: string) => hidesPage(dest, fromPath, repo, who, false, links);
 
   // Reference definitions first: remember which labels point at hidden pages.
   const hiddenLabels = new Set<string>();
+  // Only the definition CommonMark puts in effect for a label (code review, round 9): a
+  // `]:` inside a paragraph defines nothing, and is left for the sweep.
+  const defs = definitionsIn(body);
   let out = body.replace(REF_DEF, (whole, label: string, dest: string) => {
     if (!hidden(dest)) return whole;
+    const inEffect = defs?.get(normalLabel(label));
+    if (defs && (inEffect === undefined || !hidden(inEffect))) return whole;
     hiddenLabels.add(label.trim().toLowerCase());
     return "";
   });
@@ -83,14 +90,41 @@ export function redactLinks(body: string, fromPath: string, repo: Repo, who: Ide
     out = out.replace(/\[([^\][]{0,999})\]\[([^\][]{0,999})\]/g, (whole, text: string, label: string) =>
       hiddenLabels.has((label || text).trim().toLowerCase()) ? RESTRICTED : whole,
     );
-    out = out.replace(/\[([^\][]{1,999})\](?![(\[:])/g, (whole, label: string) => (hiddenLabels.has(label.trim().toLowerCase()) ? RESTRICTED : whole));
+    // Not a label right after a `]`: that's a full reference whose text the form above
+    // couldn't read (it holds brackets: merge gate, PR 53, round 3), and the label alone
+    // would leave its text. The sweep takes those lines whole.
+    out = out.replace(/(?<!\])\[([^\][]{1,999})\](?![(\[:])/g, (whole, label: string) => (hiddenLabels.has(label.trim().toLowerCase()) ? RESTRICTED : whole));
   }
   out = out.replace(INLINE, (whole, _text: string, dest: string) => (hidden(dest) ? RESTRICTED : whole));
   out = redactAnchors(out, (href) => hidesPage(href, fromPath, repo, who, true));
   // The passes above keep the rest of a line, but read only the common forms. The sweep
   // after them fails closed: a line that still names a hidden page, in any form a reader
   // resolves, goes whole (references.ts).
-  return replaceLines(out, namingLines(out, fromPath, namesFor(repo, who)), RESTRICTED);
+  // The labels the first pass took the definitions of: the sweep takes their references,
+  // which the forms above miss (`[ref]:` that can't start a definition is one).
+  return untilStable(out, redactionSweep(fromPath, repo, who, new Set(hiddenLabels)));
+}
+
+/** One pass of the sweep for `who` on page `fromPath`: `liberal`, every route naming nothing fails closed, a link or not. */
+export function redactionSweep(fromPath: string, repo: Repo, who: Identity, gone = new Set<string>()): (text: string, liberal: boolean) => string {
+  const names = namesFor(repo, who);
+  // `gone`: the labels the first pass took the definitions of, whose references each pass
+  // takes too.
+  return (text, liberal) => replaceLines(text, namingLines(text, fromPath, names, 0, [], liberal, gone), RESTRICTED);
+}
+
+/**
+ * `sweep` run until it changes nothing. Replacing a line can change what the rest means (a
+ * fence gone, code is markdown, and its links are links), so a pass can leave work for the
+ * next. Past `passes`, one last `liberal` pass, where every route naming nothing fails
+ * closed, ends it.
+ */
+export function untilStable(text: string, sweep: (text: string, liberal: boolean) => string, passes = 3): string {
+  for (let pass = 1; ; pass++) {
+    const next = sweep(text, pass > passes);
+    if (next === text || pass > passes) return next;
+    text = next;
+  }
 }
 
 /** Each `<a href="…">…</a>` whose href is hidden, as the placeholder (its `</a>` within 4,000 characters). */

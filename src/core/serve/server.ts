@@ -32,8 +32,7 @@ const TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-export interface ServeOptions extends Omit<SessionOptions, "knowledgeRoot"> {
-  knowledgeRoot: string;
+export interface ServeOptions extends SessionOptions {
   port: number;
   token: string;
   extensions: ReadonlySet<string>;

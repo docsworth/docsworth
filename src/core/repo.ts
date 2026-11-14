@@ -15,12 +15,16 @@ export interface Page extends Frontmatter {
   links: string[];
   sha256: string;
   unknownFields: string[];
+  /** Its frontmatter `slug`, if a string: where a docs site serves it (`siteRoute`). Not in the format; read for redaction and lint. */
+  slug?: string;
 }
 
 export interface InvalidPage {
   path: string;
   /** The `id` field if present and a string, so lint can still report duplicates. */
   id?: string;
+  /** The `slug` field if a string: redaction hides the route it gives the page too. */
+  slug?: string;
   issues: FieldIssue[];
 }
 
@@ -95,10 +99,12 @@ export function parsePage(path: string, text: string): Page | InvalidPage {
   const doc = splitFrontmatter(text);
   if (!doc.data) return { path, issues: [{ field: "(frontmatter)", message: doc.error ?? "missing frontmatter" }] };
   const rawId = typeof doc.data.id === "string" ? doc.data.id : undefined;
+  const slug = typeof doc.data.slug === "string" ? { slug: doc.data.slug } : {};
   const v = validateFrontmatter(doc.data);
-  if (!v.ok) return { path, id: rawId, issues: v.issues };
+  if (!v.ok) return { path, id: rawId, ...slug, issues: v.issues };
   return {
     ...v.value,
+    ...slug,
     path,
     body: doc.body,
     headings: extractHeadings(doc.body),

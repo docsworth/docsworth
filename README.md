@@ -44,7 +44,8 @@ docsworth init --team platform     # config, CODEOWNERS, root map, a guide
 docsworth lint .                   # 3 pages, 0 errors, 0 warnings
 ```
 
-Add `--ci` to `init` for a workflow that lints and compiles on every PR.
+`init` reads your GitHub org from the repo's remote; in a repo without one yet, add
+`--org <your-org>`. Add `--ci` for a workflow that lints and compiles on every PR.
 
 Install the Claude Code plugin from this repo's marketplace:
 
@@ -67,12 +68,54 @@ Start Claude Code in the knowledge repo, or set `DOCSWORTH_KNOWLEDGE_DIR` to its
 The server uses your own GitHub identity (`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth
 token`), so your repo and team permissions decide what you see.
 
+## Adopting existing docs
+
+Docs you already have, a Docusaurus site's say, become pages without moving a URL. With
+them under `knowledge/` (or `knowledge_root` in `.knowledge/config.yaml` set to where they
+are), after `init`:
+
+```bash
+docsworth adopt --team docs        # the frontmatter each page lacks, as drafts
+docsworth lint .
+```
+
+`adopt` gives each page the fields it lacks, and keeps everything it has:
+
+- a page's `id` is its own, else its file name, a Docusaurus number prefix removed, so the
+  site's URLs stay where they are;
+- its owner comes from CODEOWNERS, else `--team`;
+- a route link like `/guides/setup` becomes a relative link to the file,
+  `../guides/setup.md`;
+- keys a site generator keeps, such as `sidebar_position`, go in `frontmatter.extra_fields`;
+- images a site serves from its `static/` directory (`/img/x.png`) get a hint naming the
+  `static_dirs` line to add, after which lint reads them there.
+
+A page or link it can't settle stays as it is, listed, and lint fails it until it's fixed
+by hand: a category index like `guides/index.md`, two pages with one file name, a link to
+nothing. `--dry-run` reports and writes nothing.
+
+Adopted pages are drafts, so agents cite none of them yet. Once a team has read its pages:
+
+```bash
+docsworth verify knowledge/guides  # canonical, verified today
+```
+
+Both commands only change files. Commit them and open a pull request, which CODEOWNERS
+sends to the owning team.
+
+If the site stays up, set `site_url` (`https://docs.example.com/docs/`) in the config.
+Then a link to a page someone can't see reads `[restricted page]` by its full URL on the
+site, as it already does by its route. A link without an extension that names nothing
+reads `[restricted page]` too: a route can't be told from a hidden page's.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `docsworth init [dir]` | Scaffold config, CODEOWNERS, `knowledge/index.md`, a glossary and a writing guide. Never overwrites. |
 | `docsworth lint [dir]` | Frontmatter, CODEOWNERS ownership, links and duplicate ids. Exit 1 on errors; overdue pages only warn. |
+| `docsworth adopt [dir] [--team t]` | Existing pages get the frontmatter they lack, as drafts, and route links become `.md` links; lists what it can't settle. Working tree only; `--dry-run`. |
+| `docsworth verify <paths…>` | The draft or canonical pages under the paths become canonical, verified today. Working tree only; `--dry-run`. |
 | `docsworth stale [dir]` | Pages past their review SLA or without a team owner. |
 | `docsworth coverage [dir] [--html f]` | Percentage team-owned and percentage verified within SLA, by team; optional static dashboard. |
 | `docsworth digest [dir] [--send]` | Weekly per-team digest: due, overdue, most read by agents. Prints unless `--send`. |
@@ -131,11 +174,20 @@ npm run docsworth -- --as-of 2026-11-02 audit examples/acme --out audit
 ## Browser extension
 
 A side panel for Chrome (and other Chromium browsers) over `docsworth serve`. From the panel
-you can search and read pages, or suggest an addition to one. From any page, right-click a
-selection and choose **Save selection to Docsworth**. In Gmail, a **Save to Docsworth**
-button beside a thread's subject opens the panel. The panel first shows the pages that may
-already cover the thread, then a draft page filled from it. Nothing is written until you
-open the draft PR. It isn't in the Chrome Web Store yet: build it and load it unpacked.
+you can search and read pages, or suggest an addition to one.
+
+**Saving what you read.**
+- **From the menu:** on any page, right-click and choose **Save page to Docsworth**, or
+  select some text and choose **Save selection to Docsworth**.
+- **From the panel:** **Save this page** and **Save the selection** read the tab you opened
+  the panel from with the toolbar button.
+- **In Gmail:** a **Save to Docsworth** button beside a thread's subject.
+
+The page's main content or the selection arrives as markdown, with its headings, links,
+code blocks and tables, and without what the page hides or its navigation. The panel first
+shows the pages that may already cover it, each with **Add the capture here**, then a draft
+page filled from it, with its source. Nothing is written until you open the PR. The
+extension isn't in the Chrome Web Store yet: build it and load it unpacked.
 
 ```bash
 npm run build -w @docsworth/extension
@@ -177,8 +229,8 @@ See [AGENTS.md](AGENTS.md), and [docs/releasing.md](docs/releasing.md) for relea
 
 ## Status
 
-v0.2. What's in it, and what hasn't been verified against the real thing yet, is in
-[the release notes](docs/release-notes/v0.2.0.md).
+v0.3. What's in it, and what hasn't been verified against the real thing yet, is in
+[the release notes](docs/release-notes/v0.3.0.md).
 
 ## License
 

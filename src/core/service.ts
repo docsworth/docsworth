@@ -15,10 +15,11 @@ import { buildNewPage, NEW_PAGE_PREFIX, type NewPageType, slugify } from "./new-
 import { type Policy, toolRefusal } from "./policy.js";
 import { WRITE_TOOLS } from "./tool-registry.js";
 import type { GitHubClient } from "./github.js";
+import { EXTERNAL, linkPath, pageLinks } from "./links.js";
 import { extractLinks, loadRepo, type Page, type Repo, resolveLink } from "./repo.js";
 import { ACL_INTERNAL, PAGE_TYPES, type PageType } from "./schema.js";
 import { splitFrontmatter } from "./frontmatter.js";
-import { SearchIndex, snippet } from "./search.js";
+import { plainText, SearchIndex, snippet } from "./search.js";
 import { listStale, type StaleEntry } from "./stale.js";
 import { applyEdits, assertProtectedFieldsUnchanged, type Edit, openPagePr, replaceBody, setLastVerified, WriteError } from "./writes.js";
 
@@ -102,66 +103,98 @@ const LOCAL_IDENTITY_FOR_POLICY: Identity = { mode: "local", login: null, teams:
 // Where a mirrored page is read from when its links are resolved: outside the knowledge root.
 const MIRROR_ORIGIN = ".knowledge/mirror";
 
-export class KnowledgeService {
-  private repo!: Repo;
-  private index!: SearchIndex;
+type MirrorView = { pages: MirrorPage[]; origin: MirrorPage[]; hidden: MirrorPage[]; index: SearchIndex };
+type Snapshot = { commit: string | null; dirty: boolean | null; content_sha256: string };
+
+/**
+ * One load of the repo: the pages, their search index and the served mirror. Never changed
+ * after it is built, except two caches filled on first use: the mirror's views (one per
+ * audience) and the snapshot. A reload builds a new one, so a call that took this one keeps
+ * a consistent view.
+ */
+interface Loaded {
+  readonly repo: Repo;
+  readonly index: SearchIndex;
+  readonly mirror: MirrorPage[];
+  /** Keyed by audience (repo access and teams), so services with any identity can share it. */
+  readonly mirrorViews: Map<string, MirrorView>;
+  /** mtimes of the non-page inputs (config, CODEOWNERS) it was built from. */
+  readonly inputs: string;
+  snap: Snapshot | null;
+}
+
+/**
+ * Loads the repo and keeps it until something changes, for one service or, in `docsworth
+ * serve`, for every session's service: one copy of the pages and their index however many
+ * tabs are open (a 3,000-page repo took about 50 MB per copy). It owns the one file watcher.
+ * What belongs to a session (its taint, its cached default branch) stays on the service.
+ */
+export class RepoLoader {
+  private loaded: Loaded | null = null;
   private dirty = false;
-  /** mtimes of the non-page inputs (config, CODEOWNERS) the loaded repo was built from. */
-  private inputs = "";
+  /** watch() was asked for, and close() hasn't stopped it. */
+  private watching = false;
   private watcher: FSWatcher | null = null;
-  private watchedDir: string | null = null;
   private settle: NodeJS.Timeout | null = null;
-  private defaultBranch: string | null = null;
+  /** The directory being watched, or to be once it exists (tests read it). */
+  watchedDir: string | null = null;
+  /** How many times the repo was loaded (tests). */
+  loads = 0;
+  /** Called after each load: serve moves its idle sessions onto it, so no old load is kept. */
+  onLoad: (() => void) | null = null;
 
-  /** Mirrored pages, when mirror.serve is on; one search index per audience (views). */
-  private mirror: MirrorPage[] = [];
-  private readonly mirrorViews = new Map<string, { pages: MirrorPage[]; origin: MirrorPage[]; hidden: MirrorPage[]; index: SearchIndex }>();
+  constructor(private readonly root: string) {}
 
-  /** Team ACLs whose content this session has seen (write-path taint check). */
-  private readonly tainted = new Set<string>();
-
-  /** The random end of a drafted page's id and file name (replaced in tests). */
-  private draftSuffix = () => randomBytes(6).toString("hex");
-
-  constructor(
-    private readonly root: string,
-    private readonly identity: IdentitySource,
-    private readonly now: () => Date = () => new Date(),
-  ) {
-    this.reload();
+  /** The current load: the same object until a change is seen, then a new one, built once. */
+  current(): Loaded {
+    if (!this.loaded || this.dirty || this.inputsStamp(this.loaded.repo) !== this.loaded.inputs) this.load();
+    // A knowledge root that couldn't be watched (the config named one that didn't exist
+    // yet): try again on every call, and load it as soon as it can be watched.
+    if (this.watching && !this.watcher) {
+      this.follow(this.loaded!.repo);
+      if (this.watcher) this.load();
+    }
+    return this.loaded!;
   }
 
-  reload(): void {
-    this.repo = loadRepo(this.root);
-    this.snap = null; // recomputed on first use, so it always names what is being served
+  /** The newest load, without looking for changes. */
+  latest(): Loaded | null {
+    return this.loaded;
+  }
+
+  /** Has a change been seen that the next call will load (tests). */
+  get pending(): boolean {
+    return this.dirty;
+  }
+
+  private load(): void {
+    const repo = loadRepo(this.root);
     // Index bodies with links to non-internal pages already redacted, so a team page's
     // title in a public page's link text can't surface through ranking or snippets.
     const publicView: Identity = { mode: "local", login: null, teams: new Set(), repoAccess: true, canWrite: false };
-    this.mirror = this.repo.config.mirror.serve ? servedMirror(this.root, this.repo.config.mirror.out_dir) : [];
+    const mirror = repo.config.mirror.serve ? servedMirror(this.root, repo.config.mirror.out_dir) : [];
     // Links to mirrored pages outside the public view are redacted from the index too.
-    const teamMirror = this.mirror.filter((m) => !canSee(m, publicView));
-    this.index = new SearchIndex(
-      this.repo.pages.map((p) => ({
+    const teamMirror = mirror.filter((m) => !canSee(m, publicView));
+    const index = new SearchIndex(
+      repo.pages.map((p) => ({
         title: p.title,
         headings: p.headings,
         description: p.description,
-        body: redactHiddenLinks(redactLinks(p.body, p.path, this.repo, publicView), teamMirror, RESTRICTED),
+        body: redactHiddenLinks(redactLinks(p.body, p.path, repo, publicView), teamMirror, RESTRICTED),
         keywords: [p.id, ...(p.applies_to ?? [])],
       })),
     );
-    this.mirrorViews.clear();
+    // The snapshot is recomputed on first use, so it always names what is being served.
+    this.loaded = { repo, index, mirror, mirrorViews: new Map(), inputs: this.inputsStamp(repo), snap: null };
     this.dirty = false;
-    this.inputs = this.inputsStamp();
-    // Config may have changed: forget the cached branch, follow a moved knowledge root.
-    this.defaultBranch = null;
-    if (this.watcher && this.watchedDir !== join(this.root, this.repo.config.knowledge_root)) {
-      this.close();
-      this.watch();
-    }
+    this.loads++;
+    this.onLoad?.();
+    // Config may have moved the knowledge root: follow it.
+    if (this.watching && this.watchedDir !== join(this.root, repo.config.knowledge_root)) this.follow(repo);
   }
 
   /** Config and CODEOWNERS live outside the watched knowledge root; stat them per call. */
-  private inputsStamp(): string {
+  private inputsStamp(repo: Repo): string {
     const stamp = (abs: string) => {
       try {
         return statSync(abs).mtimeMs;
@@ -170,8 +203,118 @@ export class KnowledgeService {
       }
     };
     // A mirror run rewrites its ownership records, so their directory's mtime changes.
-    const mirror = this.repo?.config.mirror.serve ? [stamp(join(stateDir(this.root), "mirror"))] : [];
+    const mirror = repo.config.mirror.serve ? [stamp(join(stateDir(this.root), "mirror"))] : [];
     return [...[CONFIG_PATH, ...CODEOWNERS_LOCATIONS].map((rel) => stamp(join(this.root, rel))), ...mirror].join("|");
+  }
+
+  /** Load again on the next call. */
+  invalidate(): void {
+    this.dirty = true;
+  }
+
+  /** Mark the load stale on any change under the knowledge root. */
+  watch(): void {
+    if (this.watching) return;
+    const repo = this.current().repo;
+    this.watching = true;
+    this.follow(repo);
+  }
+
+  /** Watch `repo`'s knowledge root, in place of whatever was watched before. */
+  private follow(repo: Repo): void {
+    this.stop();
+    this.watchedDir = join(this.root, repo.config.knowledge_root);
+    try {
+      this.watcher = watch(this.watchedDir, { recursive: true }, () => {
+        this.dirty = true;
+      });
+    } catch {
+      return; // not there yet: current() tries again on every call
+    }
+    // macOS drops events for changes made while a new watch stream is still starting
+    // (3 of 20 writes made right after a restart were never reported). Reload once the
+    // stream has had time to start, so a page changed in that window is not served stale.
+    this.settle = setTimeout(() => (this.dirty = true), WATCH_SETTLE_MS);
+    this.settle.unref();
+  }
+
+  close(): void {
+    this.watching = false;
+    this.stop();
+  }
+
+  private stop(): void {
+    this.watcher?.close();
+    this.watcher = null;
+    if (this.settle) clearTimeout(this.settle);
+    this.settle = null;
+  }
+}
+
+export class KnowledgeService {
+  private readonly loader: RepoLoader;
+  /** A loader this service made is its own to close; a shared one belongs to its owner. */
+  private readonly ownsLoader: boolean;
+  private loaded!: Loaded;
+  private repo!: Repo;
+  private index!: SearchIndex;
+  private defaultBranch: string | null = null;
+
+  /** Mirrored pages, when mirror.serve is on; one search index per audience (views). */
+  private mirror: MirrorPage[] = [];
+  private mirrorViews!: Map<string, MirrorView>;
+
+  /** Team ACLs whose content this session has seen (write-path taint check). */
+  private readonly tainted = new Set<string>();
+
+  /** The random end of a drafted page's id and file name (replaced in tests). */
+  private draftSuffix = () => randomBytes(6).toString("hex");
+
+  /** `loader`: a load shared with other services (`docsworth serve`'s sessions); else its own. */
+  constructor(
+    private readonly root: string,
+    private readonly identity: IdentitySource,
+    private readonly now: () => Date = () => new Date(),
+    loader?: RepoLoader,
+  ) {
+    this.ownsLoader = !loader;
+    this.loader = loader ?? new RepoLoader(root);
+    this.adopt(this.loader.current());
+  }
+
+  /** Load the repo again now. */
+  reload(): void {
+    this.loader.invalidate();
+    this.current();
+  }
+
+  /**
+   * Point at the loader's newest load, letting go of an older one. Only while no call of
+   * this service is running: `docsworth serve` calls it for a session with no request in
+   * flight, so an idle tab doesn't keep a whole old copy of the repo alive.
+   */
+  release(): void {
+    const latest = this.loader.latest();
+    if (latest && latest !== this.loaded) this.adopt(latest);
+  }
+
+  /** Take a new load, and drop what this service cached from the last one. */
+  private adopt(loaded: Loaded): void {
+    this.loaded = loaded;
+    this.repo = loaded.repo;
+    this.index = loaded.index;
+    this.mirror = loaded.mirror;
+    this.mirrorViews = loaded.mirrorViews;
+    // Config may have changed: forget the cached branch.
+    this.defaultBranch = null;
+  }
+
+  /** The watched directory and a pending reload live on the loader (tests read them here). */
+  private get watchedDir(): string | null {
+    return this.loader.watchedDir;
+  }
+  private get dirty(): boolean {
+    return this.loader.pending;
   }
 
   /**
@@ -195,59 +338,49 @@ export class KnowledgeService {
     return view;
   }
 
-  /** Reload on the next call. `docsworth serve` runs one watcher for all its sessions' services. */
+  /** Reload on the next call. */
   invalidate(): void {
-    this.dirty = true;
+    this.loader.invalidate();
   }
 
   /** Mark the index dirty on any change under the knowledge root. */
   watch(): void {
-    if (this.watcher) return;
-    this.watchedDir = join(this.root, this.repo.config.knowledge_root);
-    this.watcher = watch(this.watchedDir, { recursive: true }, () => {
-      this.dirty = true;
-    });
-    // macOS drops events for changes made while a new watch stream is still starting
-    // (3 of 20 writes made right after a restart were never reported). Reload once the
-    // stream has had time to start, so a page changed in that window is not served stale.
-    this.settle = setTimeout(() => (this.dirty = true), WATCH_SETTLE_MS);
-    this.settle.unref();
+    this.loader.watch();
   }
+
+  /** Stops this service's own watcher; a shared loader's is its owner's to stop. */
   close(): void {
-    this.watcher?.close();
-    this.watcher = null;
-    if (this.settle) clearTimeout(this.settle);
-    this.settle = null;
+    if (this.ownsLoader) this.loader.close();
   }
 
   private current(): Repo {
-    if (this.dirty || this.inputsStamp() !== this.inputs) this.reload();
+    const loaded = this.loader.current();
+    if (loaded !== this.loaded) this.adopt(loaded);
     return this.repo;
   }
-
-  private snap: { commit: string | null; dirty: boolean | null; content_sha256: string } | null = null;
 
   /**
    * The knowledge actually being served: the checkout's HEAD and whether the served files
    * differ from it, plus a hash of the loaded config, ownership and pages. Refreshed after
    * every reload, so an audit event names the snapshot its answer came from.
    */
-  snapshot(): { commit: string | null; dirty: boolean | null; content_sha256: string } {
+  snapshot(): Snapshot {
     const repo = this.current();
-    if (this.snap) return this.snap;
+    const loaded = this.loaded;
+    if (loaded.snap) return loaded.snap;
     const h = createHash("sha256");
     h.update(JSON.stringify(repo.config));
     h.update(JSON.stringify(repo.codeowners.rules.map((r) => [r.pattern, r.owners.map((o) => o.raw)])));
     for (const p of [...repo.pages].sort((a, b) => a.path.localeCompare(b.path))) h.update(`${p.path}\0${JSON.stringify(p)}\0`);
-    for (const m of this.mirror) h.update(`${m.id}\0${JSON.stringify(m)}\0`);
+    for (const m of loaded.mirror) h.update(`${m.id}\0${JSON.stringify(m)}\0`);
     const head = spawnSync("git", ["-C", this.root, "rev-parse", "HEAD"], { encoding: "utf8" });
-    const status = head.status === 0 ? spawnSync("git", ["-C", this.root, "status", "--porcelain", "--", repo.config.knowledge_root, CONFIG_PATH, ...CODEOWNERS_LOCATIONS], { encoding: "utf8" }) : null;
-    this.snap = {
+    const status = head.status === 0 ? spawnSync("git", ["-C", this.root, "--literal-pathspecs", "status", "--porcelain", "--", repo.config.knowledge_root, CONFIG_PATH, ...CODEOWNERS_LOCATIONS], { encoding: "utf8" }) : null;
+    loaded.snap = {
       commit: head.status === 0 ? head.stdout.trim() : null,
       dirty: status && status.status === 0 ? status.stdout.trim().length > 0 : null,
       content_sha256: h.digest("hex"),
     };
-    return this.snap;
+    return loaded.snap;
   }
 
   /** Every page id, team and applies_to tag the repo uses: what an audited argument may record. */
@@ -332,8 +465,15 @@ export class KnowledgeService {
     applies_to?: string;
     include_stale?: boolean;
     limit?: number;
-  }): Promise<{ results: SearchResult[]; excluded: Excluded[]; mirrored?: MirroredHit[]; note?: string }> {
+    /** "text": snippets cut from the page as a reader sees it (the web app); else markdown. */
+    snippets?: "markdown" | "text";
+  }): Promise<{ results: SearchResult[]; excluded: Excluded[]; mirrored?: MirroredHit[]; note?: string; snippets?: "text" }> {
     if (!args.query?.trim()) throw new ToolError("invalid", "query is empty");
+    const asText = args.snippets === "text";
+    // Cut from the redacted page either way: text only takes markup away. Each is at most 240
+    // characters around the query; a text window isn't the markdown one's, which may end
+    // inside markup (docs/security-model.md, "Redacted links").
+    const cut = (markdown: string) => snippet(asText ? plainText(markdown) : markdown, args.query);
     const who = await this.identity.get();
     this.permit("search", who);
     const repo = this.current();
@@ -364,7 +504,7 @@ export class KnowledgeService {
       if (results.length >= limit) continue;
       results.push({
         ...this.summary(page),
-        snippet: snippet(this.pageText(page, who), args.query),
+        snippet: cut(this.pageText(page, who)),
         score: hit.score,
         ...(status.citable ? {} : { gate: status.gate_reason }),
       });
@@ -379,18 +519,18 @@ export class KnowledgeService {
         // Served from memory, so checked against its file first: one edited or deleted
         // since loading is dropped, and the mirror reloaded on the next call.
         if (!stillOwned(view.origin[hit.index]!)) {
-          this.dirty = true;
+          this.invalidate();
           continue;
         }
         const m = view.pages[hit.index]!;
-        mirrored.push({ id: m.id, title: m.title, source: m.source, source_url: m.url, owner_team: m.owner_team, last_edited: m.last_edited, citable: false, snippet: snippet(m.markdown, args.query) });
+        mirrored.push({ id: m.id, title: m.title, source: m.source, source_url: m.url, owner_team: m.owner_team, last_edited: m.last_edited, citable: false, snippet: cut(m.markdown) });
       }
       this.taint(mirrored.map((h) => view.pages.find((m) => m.id === h.id)!));
     }
     this.noteRead("search", results.map((r) => repo.byId.get(r.id)!));
     this.taint(excluded.map((e) => repo.byId.get(e.id)!));
     const notes = [...(excluded.length ? [NOT_CITABLE_NOTE] : []), ...(mirrored.length ? [MIRRORED_NOTE] : [])];
-    return { results, excluded, ...(mirrored.length ? { mirrored } : {}), ...(notes.length ? { note: notes.join(" ") } : {}) };
+    return { results, excluded, ...(mirrored.length ? { mirrored } : {}), ...(notes.length ? { note: notes.join(" ") } : {}), ...(asText ? { snippets: "text" as const } : {}) };
   }
 
   async read(args: { id: string }) {
@@ -456,7 +596,7 @@ export class KnowledgeService {
     const m = at >= 0 ? view!.pages[at] : undefined;
     // Changed since loading: don't serve it, and reload on the next call.
     const changed = Boolean(m) && !stillOwned(view!.origin[at]!);
-    if (changed) this.dirty = true;
+    if (changed) this.invalidate();
     if (!m || changed) throw new ToolError("not_found", `no page with id \`${id}\``);
     this.taint([m]);
     return {
@@ -565,28 +705,47 @@ export class KnowledgeService {
     };
   }
 
-  /** Counts over the caller's visible pages, by team, with what is due soon and what is stale. */
-  async uiOverview() {
+  /**
+   * Counts over the caller's visible pages, by team, with what is due soon and what is stale.
+   * `list_limit` keeps a big repo's overview short: the first of each list, the most pressing
+   * first, with `due_soon_total` and `stale_total`. Only the pages returned are named, so only
+   * those taint the session; the counts above the lists name no page.
+   */
+  async uiOverview(args: { list_limit?: number } = {}) {
     const who = await this.identity.get();
     this.permit("ui_overview", who);
     const repo = this.current();
     const visible = visiblePages(repo, who);
     const pages = visible.map((p) => ({ page: p, s: this.summary(p) }));
+    // A deprecated page is retired, not up for review: like coverage and stale, the review
+    // counts leave it out, so they agree with the stale list below.
+    const sla = (xs: typeof pages, state: "overdue" | "due_soon") => xs.filter((x) => x.s.status !== "deprecated" && x.s.sla_state === state);
     const tally = (xs: typeof pages) => ({
       pages: xs.length,
       citable: xs.filter((x) => x.s.citable).length,
-      overdue: xs.filter((x) => x.s.sla_state === "overdue").length,
-      due_soon: xs.filter((x) => x.s.sla_state === "due_soon").length,
+      overdue: sla(xs, "overdue").length,
+      due_soon: sla(xs, "due_soon").length,
     });
-    const dueSoon = pages.filter((x) => x.s.sla_state === "due_soon").sort((a, b) => (a.s.due ?? "").localeCompare(b.s.due ?? ""));
+    const dueSoon = sla(pages, "due_soon").sort((a, b) => (a.s.due ?? "").localeCompare(b.s.due ?? ""));
     const stale = listStale(visible, repo, this.now());
-    this.taint([...dueSoon.map((x) => x.page), ...stale.map((e) => repo.byId.get(e.id)!)]);
+    const first = <T>(xs: T[]) => (args.list_limit === undefined ? xs : xs.slice(0, args.list_limit));
+    const dueShown = first(dueSoon);
+    const staleShown = first(stale);
+    this.taint([...dueShown.map((x) => x.page), ...staleShown.map((e) => repo.byId.get(e.id)!)]);
     return {
       as_of: formatDate(utcToday(this.now())),
       totals: { ...tally(pages), draft: pages.filter((x) => x.s.status === "draft").length, deprecated: pages.filter((x) => x.s.status === "deprecated").length },
       teams: [...new Set(pages.map((x) => x.s.owner_team))].sort().map((team) => ({ team, ...tally(pages.filter((x) => x.s.owner_team === team)) })),
-      due_soon: dueSoon.map((x) => x.s),
-      stale,
+      due_soon: dueShown.map((x) => x.s),
+      stale: staleShown,
+      due_soon_total: dueSoon.length,
+      stale_total: stale.length,
+      // Files under the knowledge root that aren't valid pages, which nothing here serves: a
+      // count only, of every audience, never a path or a name (the owner's call, 2026-11-12;
+      // anyone this server answers can read the repository's files anyway). It's what
+      // loadRepo walked, so exactly what `docsworth lint` lists as frontmatter errors; like
+      // every page and lint since the first loader, it skips dot-directories (walkMarkdown).
+      skipped_files: repo.invalid.length,
     };
   }
 
@@ -603,7 +762,10 @@ export class KnowledgeService {
     // The links in what the caller is shown: redaction can drop a whole line, and a link to
     // a visible page on it with it, which then names nothing and taints nothing.
     const linked = new Map<string, Page>();
-    for (const link of extractLinks(shown.content)) {
+    // The loader's links, and CommonMark's (link text with brackets in it, say): every page
+    // either names is linked, and taints, as before.
+    const fromCommonMark = pageLinks(shown.content).filter((d) => d && !EXTERNAL.test(d)).map(linkPath);
+    for (const link of new Set([...extractLinks(shown.content), ...fromCommonMark])) {
       const target = repo.byPath.get(resolveLink(page.path, link));
       if (target && target !== page && canSee(target, who)) linked.set(target.path, target);
     }
@@ -615,24 +777,45 @@ export class KnowledgeService {
    * Visible pages and the links between them. A link to a page the caller can't see is no
    * edge; `has_restricted_links` says a page has one, exactly as its `read` text shows a
    * placeholder for it, so the graph reveals nothing `read` doesn't.
+   *
+   * `max_nodes` keeps a big repo drawable: past it, the most-linked pages (links between
+   * visible pages only; ties by id) and the links among them. `total` says how many it
+   * chose from, and `teams` how many visible pages each team has, a count that names no
+   * page. Only the returned pages are named, so only those taint the session.
    */
-  async uiGraph(args: { owner_team?: string } = {}) {
+  async uiGraph(args: { owner_team?: string; max_nodes?: number } = {}) {
     const who = await this.identity.get();
     this.permit("ui_graph", who);
     const repo = this.current();
+    const all = visiblePages(repo, who);
     // One team's pages, for its page in the app: only those are named, so only those taint.
-    const visible = visiblePages(repo, who).filter((p) => !args.owner_team || p.owner_team === args.owner_team);
-    const seen = new Set(visible);
-    const edges = new Map<string, { from: string; to: string }>();
-    for (const p of visible)
-      for (const link of p.links) {
-        const target = repo.byPath.get(resolveLink(p.path, link));
-        if (target && target !== p && seen.has(target)) edges.set(`${p.id}\0${target.id}`, { from: p.id, to: target.id });
-      }
-    this.taint(visible);
+    const visible = all.filter((p) => !args.owner_team || p.owner_team === args.owner_team);
+    const linked = (among: Set<Page>) => {
+      const edges = new Map<string, { from: Page; to: Page }>();
+      for (const p of among)
+        for (const link of p.links) {
+          const target = repo.byPath.get(resolveLink(p.path, link));
+          if (target && target !== p && among.has(target)) edges.set(`${p.id}\0${target.id}`, { from: p, to: target });
+        }
+      return [...edges.values()];
+    };
+    let shown = visible;
+    let edges = linked(new Set(visible));
+    if (args.max_nodes !== undefined && visible.length > args.max_nodes) {
+      const degree = new Map<Page, number>();
+      for (const e of edges) for (const p of [e.from, e.to]) degree.set(p, (degree.get(p) ?? 0) + 1);
+      shown = [...visible].sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || a.id.localeCompare(b.id)).slice(0, args.max_nodes);
+      const kept = new Set(shown);
+      edges = edges.filter((e) => kept.has(e.from) && kept.has(e.to));
+    }
+    const teams = new Map<string, number>();
+    for (const p of all) teams.set(p.owner_team, (teams.get(p.owner_team) ?? 0) + 1);
+    this.taint(shown);
     return {
-      nodes: visible.map((p) => ({ ...this.summary(p), has_restricted_links: this.pageText(p, who).includes(RESTRICTED) })),
-      edges: [...edges.values()],
+      nodes: shown.map((p) => ({ ...this.summary(p), has_restricted_links: this.pageText(p, who).includes(RESTRICTED) })),
+      edges: edges.map((e) => ({ from: e.from.id, to: e.to.id })),
+      total: visible.length,
+      teams: [...teams].sort(([a], [b]) => a.localeCompare(b)).map(([team, pages]) => ({ team, pages })),
     };
   }
 

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command, InvalidArgumentError } from "commander";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { adoptRepo } from "./core/adopt.js";
 import { actorOf, createAuditLog, type AuditLog, stateDir } from "./core/audit-log.js";
 import { type Config, CONFIG_PATH, ConfigError, loadConfig } from "./core/config.js";
 import { computeCoverage, formatCoverage } from "./core/coverage.js";
@@ -21,6 +22,8 @@ import { DEFAULT_PORT, startServer } from "./core/serve/server.js";
 import { loadToken } from "./core/serve/token.js";
 import { KnowledgeService } from "./core/service.js";
 import { listStale } from "./core/stale.js";
+import { printable, printableJson } from "./core/printable.js";
+import { verifyPages } from "./core/verify-pages.js";
 import { PACKAGE_VERSION } from "./core/version.js";
 import { existsSync, readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
@@ -183,8 +186,53 @@ program
   .option("--json", "machine-readable output")
   .action((dir: string, opts: { json?: boolean }) => {
     const result = lintRepo(repoAt(dir), now());
-    console.log(opts.json ? JSON.stringify(result, null, 2) : formatDiagnostics(result));
+    console.log(opts.json ? printableJson(result) : formatDiagnostics(result));
     process.exitCode = result.errors > 0 ? 1 : 0;
+  });
+
+program
+  .command("adopt")
+  .description("give existing markdown pages the frontmatter Docsworth needs, as drafts, and turn route links into .md links (working tree only)")
+  .argument("[dir]", "knowledge repo root", ".")
+  .option("--team <team>", "owning team for pages CODEOWNERS gives no single team")
+  .option("--review-every <period>", "review period for pages without one", "90d")
+  .option("--dry-run", "report what would change; write nothing")
+  .option("--json", "machine-readable output")
+  .action((dir: string, opts: { team?: string; reviewEvery: string; dryRun?: boolean; json?: boolean }) => {
+    const r = adoptRepo(resolve(dir), { now: now(), team: opts.team, reviewEvery: opts.reviewEvery, dryRun: opts.dryRun });
+    if (opts.json) return console.log(printableJson(r));
+    // Paths, links, keys and reasons quote what pages hold: printed escaped.
+    const say = (line: string) => console.log(printable(line));
+    for (const l of r.left) say(`left       ${l.path}: ${l.reason}`);
+    for (const l of r.linksLeft) say(`link left  ${l.path}: \`${l.link}\` ${l.why}`);
+    if (r.extraFields.length) say(`config     frontmatter.extra_fields gains ${r.extraFields.join(", ")}`);
+    for (const h of r.hints) say(`hint       ${h}`);
+    const n = (count: number, what: string) => `${count} ${what}${count === 1 ? "" : "s"}`;
+    console.log(
+      `\n${r.dryRun ? "Would adopt" : "Adopted"} ${n(r.adopted.length, "page")} (${r.unchanged.length} unchanged, ${r.left.length} left); ` +
+        `${r.linksRewritten} ${r.linksRewritten === 1 ? "link" : "links"} rewritten, ${r.linksLeft.length} left.`,
+    );
+    console.log(
+      r.dryRun
+        ? "Dry run: nothing written."
+        : `Nothing is committed. Review the diff, run \`docsworth lint ${dir}\`, and open a pull request: adopted pages are drafts, cited once their team runs \`docsworth verify\`.`,
+    );
+  });
+
+program
+  .command("verify")
+  .description("verify pages: each draft or canonical page under the paths becomes canonical, verified today (working tree only)")
+  .argument("<paths...>", "pages, or directories of them")
+  .option("--dir <dir>", "knowledge repo root", ".")
+  .option("--dry-run", "report what would change; write nothing")
+  .option("--json", "machine-readable output")
+  .action((paths: string[], opts: { dir: string; dryRun?: boolean; json?: boolean }) => {
+    // Paths are the shell's, relative to where it runs, whatever --dir says.
+    const r = verifyPages(resolve(opts.dir), paths.map((p) => resolve(p)), { now: now(), dryRun: opts.dryRun });
+    if (opts.json) return console.log(printableJson(r));
+    for (const l of r.left) console.log(printable(`left  ${l.path}: ${l.reason}`));
+    console.log(`\n${r.dryRun ? "Would verify" : "Verified"} ${r.verified.length} page${r.verified.length === 1 ? "" : "s"} (${r.unchanged.length} already verified today, ${r.left.length} left).`);
+    console.log(r.dryRun ? "Dry run: nothing written." : "Nothing is committed: open a pull request, which the owning team reviews.");
   });
 
 program
@@ -307,7 +355,6 @@ program
     const web = join(dirname(fileURLToPath(import.meta.url)), "web");
     const serving = await startServer({
       root,
-      knowledgeRoot: config.knowledge_root,
       identity,
       who,
       audit,
@@ -422,7 +469,8 @@ const isMain = process.argv[1] && /(?:cli\.(?:ts|js)|docsworth)$/.test(process.a
 if (isMain) {
   program.parseAsync().catch(async (err: unknown) => {
     if (isUserError(err)) {
-      console.error(`docsworth: ${(err as Error).message}`);
+      // A message can quote a path or a value a page holds: printed escaped.
+      console.error(`docsworth: ${printable((err as Error).message)}`);
       // Exit 3 if the failure also left a change its required audit log doesn't show.
       process.exit(process.exitCode === EXIT_AUDIT_DEGRADED ? EXIT_AUDIT_DEGRADED : 2);
     }

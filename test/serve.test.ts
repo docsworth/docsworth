@@ -1,13 +1,15 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AuditEvent, AuditLog, type AuditSink } from "../src/core/audit-log.js";
 import { LOCAL_IDENTITY } from "../src/core/identity.js";
 import { SECURITY_HEADERS, type Serving, startServer } from "../src/core/serve/server.js";
+import { WATCH_SETTLE_MS } from "../src/core/service.js";
 import { copyAcme, fixedIdentity, NOW } from "./helpers.js";
 
 const TOKEN = "t".repeat(43);
@@ -34,7 +36,6 @@ async function serve(opts: { maxSessions?: number; idleMs?: number; webRoot?: st
   const audit = new AuditLog([sink], { session: "serve-run", server: { version: "test", repo: null, commit: null } }, () => NOW, () => {});
   const s: Serving = await startServer({
     root: acme.root,
-    knowledgeRoot: "knowledge",
     identity: fixedIdentity(LOCAL_IDENTITY),
     who: LOCAL_IDENTITY,
     audit,
@@ -194,37 +195,176 @@ describe("docsworth serve: MCP sessions (R11)", () => {
     expect(s.sessions.size).toBe(0);
   });
 
+  const start = (port: number, holdBody?: Promise<void>) => raw(port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT, holdBody });
+  const LIST = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  const inSession = (port: number, sid: string, holdBody?: Promise<void>) =>
+    raw(port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}`, "mcp-session-id": sid, "mcp-protocol-version": "2025-06-18" }, body: LIST, holdBody });
+  const sidOf = (r: { headers: Record<string, string | string[] | undefined> }) => r.headers["mcp-session-id"] as string;
+  /** Makes a session's close take a while, as a real audit sink's write can: the window a race needs. */
+  const slowClose = (s: Serving, sid: string) => {
+    const session = (s.sessions as unknown as { sessions: Map<string, { server: { close(): Promise<void> } }> }).sessions.get(sid)!;
+    const close = session.server.close.bind(session.server);
+    let closes = 0;
+    session.server.close = async () => {
+      closes++;
+      await new Promise((r) => setTimeout(r, 50));
+      await close();
+    };
+    return () => closes;
+  };
+  const BUSY = (n: number) => ({ error: { code: "unavailable", message: `this server is answering ${n} sessions at once; try again in a moment` } });
+
   it("holds the session cap under concurrent starts, and frees a slot when one ends", async () => {
     const { s } = await serve({ maxSessions: 3 });
-    const starts = await Promise.all(
-      Array.from({ length: 8 }, () => raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT })),
-    );
-    expect(starts.filter((r) => r.status === 200)).toHaveLength(3);
-    const refused = starts.filter((r) => r.status === 503);
-    expect(refused).toHaveLength(5);
-    expect(JSON.parse(refused[0]!.body).error).toEqual({ code: "unavailable", message: "this server already has 3 sessions open; close a tab or wait for idle ones to expire" });
+    const sizes: number[] = [];
+    const starts = await Promise.all(Array.from({ length: 8 }, () => start(s.port).then((r) => (sizes.push(s.sessions.size), r))));
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(3);
     expect(s.sessions.size).toBe(3);
-    const id = starts.find((r) => r.status === 200)!.headers["mcp-session-id"] as string;
-    const del = await raw(s.port, { method: "DELETE", path: "/mcp", headers: { authorization: `Bearer ${TOKEN}`, "mcp-session-id": id } });
+    // Each start either got a session or found every slot busy: never anything else.
+    for (const r of starts) expect(r.status === 200 || (r.status === 503 && JSON.parse(r.body).error.message === BUSY(3).error.message)).toBe(true);
+    const live = (s.sessions as unknown as { sessions: Map<string, unknown> }).sessions;
+    const id = starts.find((r) => r.status === 200 && live.has(sidOf(r)))!;
+    const del = await raw(s.port, { method: "DELETE", path: "/mcp", headers: { authorization: `Bearer ${TOKEN}`, "mcp-session-id": sidOf(id) } });
     expect(del.status).toBe(200);
     expect(s.sessions.size).toBe(2);
-    expect((await raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT })).status).toBe(200);
+    expect((await start(s.port)).status).toBe(200);
   });
 
-  it("counts a session that is still starting against the cap", async () => {
+  it("makes room by closing the session idle longest, so closed tabs can't lock the user out", async () => {
     const { s } = await serve({ maxSessions: 2 });
-    const post = (holdBody?: Promise<void>) => raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT, holdBody });
-    // A starts and waits for its body: it holds a slot but has no session id yet.
-    let release!: () => void;
-    const a = post(new Promise<void>((r) => (release = r)));
-    await expect.poll(() => (s.sessions as unknown as { starting: number }).starting).toBe(1);
-    const b = await post();
-    const c = await post();
-    expect(b.status).toBe(200);
-    expect(c.status).toBe(503);
-    release();
-    expect((await a).status).toBe(200);
+    const a = sidOf(await start(s.port));
+    const b = sidOf(await start(s.port));
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await inSession(s.port, a)).status).toBe(200); // a was used after b: b is idle longest
+    const c = await start(s.port);
+    expect(c.status).toBe(200);
     expect(s.sessions.size).toBe(2);
+    const gone = await inSession(s.port, b);
+    expect(gone.status).toBe(404);
+    expect(JSON.parse(gone.body)).toEqual({ error: { code: "not_found", message: "no such session; it may have expired: start a new one" } });
+    expect((await inSession(s.port, a)).status).toBe(200);
+    expect((await inSession(s.port, sidOf(c))).status).toBe(200);
+    expect(s.sessions.size).toBe(2);
+  });
+
+  it("reclaims a different idle session for each of several starts arriving at once", async () => {
+    const { s } = await serve({ maxSessions: 3 });
+    const old = [];
+    for (let i = 0; i < 3; i++) old.push(sidOf(await start(s.port)));
+    const closes = old.map((sid) => slowClose(s, sid));
+    const sizes: number[] = [];
+    const fresh = await Promise.all(Array.from({ length: 3 }, () => start(s.port).then((r) => (sizes.push(s.sessions.size), r))));
+    expect(fresh.map((r) => r.status)).toEqual([200, 200, 200]);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(3);
+    const live = (s.sessions as unknown as { sessions: Map<string, unknown> }).sessions;
+    expect([...live.keys()].sort()).toEqual(fresh.map(sidOf).sort());
+    for (const sid of old) expect((await inSession(s.port, sid)).status).toBe(404);
+    expect(closes.map((n) => n())).toEqual([1, 1, 1]);
+  });
+
+  it("closes a session once when the sweep and a start both want it", async () => {
+    const { s } = await serve({ maxSessions: 1 });
+    const a = sidOf(await start(s.port));
+    const closes = slowClose(s, a);
+    const sweeping = s.sessions.sweep(Date.now() + 60 * 60_000); // a is past its idle limit
+    const b = await start(s.port); // arrives while the sweep is still closing a
+    await sweeping;
+    expect(b.status).toBe(200);
+    expect(closes()).toBe(1);
+    expect(s.sessions.size).toBe(1);
+  });
+
+  it("reclaims nothing for a first request that can't start a session", async () => {
+    const { s } = await serve({ maxSessions: 1 });
+    const kept = sidOf(await start(s.port));
+    const post = (headers: Record<string, string>, body: string) => raw(s.port, { method: "POST", path: "/mcp", headers: { authorization: `Bearer ${TOKEN}`, ...headers }, body });
+    const notInit = await post(MCP_HEADERS, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }));
+    expect(notInit.status).toBe(400);
+    expect(JSON.parse(notInit.body)).toEqual({ error: { code: "invalid", message: "start a session with an initialize request" } });
+    expect((await post(MCP_HEADERS, "{not json")).status).toBe(400);
+    expect((await post(MCP_HEADERS, JSON.stringify([JSON.parse(INIT), JSON.parse(INIT)]))).status).toBe(400);
+    const json = await post({ ...MCP_HEADERS, accept: "application/json" }, INIT);
+    expect(json.status).toBe(406);
+    expect(JSON.parse(json.body).error.code).toBe("invalid");
+    expect((await post({ ...MCP_HEADERS, "content-type": "text/plain" }, INIT)).status).toBe(415);
+    expect((await inSession(s.port, kept)).status).toBe(200); // still there
+    expect(s.sessions.size).toBe(1);
+    expect((await start(s.port)).status).toBe(200); // a real start still makes room
+  });
+
+  it("never closes a session with a request in flight: with every slot busy, a new one is refused", async () => {
+    const { s } = await serve({ maxSessions: 2 });
+    const a = sidOf(await start(s.port));
+    const b = sidOf(await start(s.port));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const calls = [inSession(s.port, a, held), inSession(s.port, b, held)];
+    await expect.poll(() => (s.sessions as unknown as { sessions: Map<string, { active: number }> }).sessions.get(a)?.active).toBe(1);
+    await expect.poll(() => (s.sessions as unknown as { sessions: Map<string, { active: number }> }).sessions.get(b)?.active).toBe(1);
+    const refused = await start(s.port);
+    expect(refused.status).toBe(503);
+    expect(JSON.parse(refused.body)).toEqual(BUSY(2));
+    release();
+    for (const r of await Promise.all(calls)) expect(r.status).toBe(200);
+    expect((await start(s.port)).status).toBe(200); // idle again: one is reclaimed
+    expect(s.sessions.size).toBe(2);
+  });
+
+  it("counts a session that is still starting against the cap, and never reclaims it", async () => {
+    const { s } = await serve({ maxSessions: 1 });
+    // A's slot is counted, and its transport hasn't started it yet: no session id. (Its body
+    // is read before the slot is counted, so the hold is in the transport, not the body.)
+    let release!: () => void;
+    const holding = new Promise<void>((r) => (release = r));
+    const proto = StreamableHTTPServerTransport.prototype;
+    const handle = proto.handleRequest;
+    let first = true;
+    proto.handleRequest = async function (this: StreamableHTTPServerTransport, ...args: Parameters<typeof handle>) {
+      if (first) {
+        first = false;
+        await holding;
+      }
+      return handle.apply(this, args);
+    };
+    try {
+      const a = start(s.port);
+      await expect.poll(() => (s.sessions as unknown as { starting: number }).starting).toBe(1);
+      expect(s.sessions.size).toBe(0);
+      const b = await start(s.port);
+      expect(b.status).toBe(503);
+      expect(JSON.parse(b.body)).toEqual(BUSY(1));
+      release();
+      expect((await a).status).toBe(200);
+      expect(s.sessions.size).toBe(1);
+    } finally {
+      proto.handleRequest = handle;
+    }
+  });
+
+  it("counts a started session once, from the moment it joins the table", async () => {
+    const { s } = await serve({ maxSessions: 2 });
+    // Holds the first request open after the session has joined the table (as a slow
+    // client reading its answer would): until it ends, that session still counts as starting.
+    const proto = StreamableHTTPServerTransport.prototype;
+    const handle = proto.handleRequest;
+    let held = false;
+    proto.handleRequest = async function (this: StreamableHTTPServerTransport, ...args: Parameters<typeof handle>) {
+      await handle.apply(this, args);
+      if (!held) {
+        held = true;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    };
+    try {
+      const a = start(s.port);
+      await expect.poll(() => s.sessions.size).toBe(1);
+      const b = await start(s.port);
+      expect(b.status).toBe(200);
+      expect((await a).status).toBe(200);
+      expect(s.sessions.size).toBe(2);
+    } finally {
+      proto.handleRequest = handle;
+    }
   });
 
   it("expires idle sessions, closing their server and service", async () => {
@@ -292,6 +432,157 @@ describe("docsworth serve: MCP sessions (R11)", () => {
     const { readFileSync } = await import("node:fs");
     writeFileSync(page, `${readFileSync(page, "utf8")}\nThe zebracorn step.\n`);
     await expect.poll(async () => ((await c.callTool({ name: "search", arguments: { query: "zebracorn" } })).structuredContent as { results: { id: string }[] }).results.map((r) => r.id), { timeout: 5000 }).toContain("rb-deploy-prod");
+    await c.close();
+  });
+});
+
+describe("docsworth serve: one load of the repo for every session", () => {
+  const services = (s: Serving) => s.sessions.services() as unknown as { repo: object }[];
+  const ids = async (c: Client, query: string) => ((await c.callTool({ name: "search", arguments: { query } })).structuredContent as { results: { id: string }[] }).results.map((r) => r.id);
+
+  it("gives every session's service the same loaded pages", async () => {
+    const { s } = await serve();
+    const a = await client(s.port);
+    const b = await client(s.port);
+    await ids(a.c, "deploy");
+    await ids(b.c, "deploy");
+    const [x, y] = services(s);
+    expect(x!.repo).toBe(y!.repo);
+    expect(s.sessions.loader.loads).toBe(1);
+    await a.c.close();
+    await b.c.close();
+  });
+
+  it("moves an idle session to a new load when one is built, so old loads aren't kept", async () => {
+    const { s, root } = await serve();
+    const open = async () => (await raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT })).headers["mcp-session-id"] as string;
+    const search = (sid: string) =>
+      raw(s.port, {
+        method: "POST",
+        path: "/mcp",
+        headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}`, "mcp-session-id": sid, "mcp-protocol-version": "2025-06-18" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "search", arguments: { query: "deploy" } } }),
+      });
+    const a = await open();
+    const b = await open();
+    expect((await search(a)).status).toBe(200);
+    expect((await search(b)).status).toBe(200);
+    const page = join(root, "knowledge/runbooks/deploy-production.md");
+    writeFileSync(page, `${readFileSync(page, "utf8")}\nThe zebracorn step.\n`);
+    s.sessions.loader.invalidate();
+    expect((await search(a)).status).toBe(200); // a builds the new load
+    const [x, y] = services(s);
+    expect(y!.repo).toBe(x!.repo); // b moved to it without a call of its own
+    expect(s.sessions.loader.loads).toBe(2);
+  });
+
+  it("moves a session onto a new load built while its first answer was still going out", async () => {
+    const { s, root } = await serve();
+    const proto = StreamableHTTPServerTransport.prototype;
+    const handle = proto.handleRequest;
+    let held = false;
+    proto.handleRequest = async function (this: StreamableHTTPServerTransport, ...args: Parameters<typeof handle>) {
+      await handle.apply(this, args);
+      if (!held) {
+        held = true; // the first session's initialize: it stays in flight a while longer
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    };
+    try {
+      const first = raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT });
+      await expect.poll(() => s.sessions.size).toBe(1);
+      const page = join(root, "knowledge/runbooks/deploy-production.md");
+      writeFileSync(page, `${readFileSync(page, "utf8")}\nThe zebracorn step.\n`);
+      s.sessions.loader.invalidate();
+      const b = (await raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT })).headers["mcp-session-id"] as string;
+      await raw(s.port, {
+        method: "POST",
+        path: "/mcp",
+        headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}`, "mcp-session-id": b, "mcp-protocol-version": "2025-06-18" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "search", arguments: { query: "zebracorn" } } }),
+      });
+      expect((await first).status).toBe(200);
+      const [x, y] = services(s);
+      await expect.poll(() => x!.repo === y!.repo).toBe(true); // once the first request ends
+    } finally {
+      proto.handleRequest = handle;
+    }
+  });
+
+  it("moves a session that was busy when the new load was built, once its request ends", async () => {
+    const { s, root } = await serve();
+    const open = async () => (await raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT })).headers["mcp-session-id"] as string;
+    const call = (sid: string, method: string, params: object, holdBody?: Promise<void>) =>
+      raw(s.port, {
+        method: "POST",
+        path: "/mcp",
+        headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}`, "mcp-session-id": sid, "mcp-protocol-version": "2025-06-18" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 4, method, params }),
+        holdBody,
+      });
+    const a = await open();
+    const b = await open();
+    await call(a, "tools/call", { name: "search", arguments: { query: "deploy" } });
+    await call(b, "tools/call", { name: "search", arguments: { query: "deploy" } });
+    // b is busy with a request that never touches the repo while a builds the new load.
+    let release!: () => void;
+    const busy = call(b, "ping", {}, new Promise<void>((r) => (release = r)));
+    await expect.poll(() => (s.sessions as unknown as { sessions: Map<string, { active: number }> }).sessions.get(b)?.active).toBe(1);
+    const page = join(root, "knowledge/runbooks/deploy-production.md");
+    writeFileSync(page, `${readFileSync(page, "utf8")}\nThe zebracorn step.\n`);
+    s.sessions.loader.invalidate();
+    await call(a, "tools/call", { name: "search", arguments: { query: "deploy" } });
+    const [x, y] = services(s);
+    expect(y!.repo).not.toBe(x!.repo); // busy: not moved under its request
+    release();
+    expect((await busy).status).toBe(200);
+    expect(y!.repo).toBe(x!.repo);
+  });
+
+  it("keeps watching for the sessions left when one is reclaimed, deleted or fails to start", async () => {
+    const { s, root } = await serve({ maxSessions: 2 });
+    // The SDK client holds an event stream open, so its session is never idle. The others
+    // are opened as the web app opens them: requests only, idle between calls.
+    const kept = await client(s.port);
+    const open = () => raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: INIT });
+    const reclaimed = (await open()).headers["mcp-session-id"] as string;
+    const gone = (await open()).headers["mcp-session-id"] as string; // the server is full: this reclaims that one
+    expect(s.sessions.size).toBe(2);
+    const live = (s.sessions as unknown as { sessions: Map<string, unknown> }).sessions;
+    expect(live.has(reclaimed)).toBe(false);
+    expect((await raw(s.port, { method: "DELETE", path: "/mcp", headers: { authorization: `Bearer ${TOKEN}`, "mcp-session-id": gone } })).status).toBe(200);
+    const notInit = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect((await raw(s.port, { method: "POST", path: "/mcp", headers: { ...MCP_HEADERS, authorization: `Bearer ${TOKEN}` }, body: notInit })).status).toBe(400);
+    expect(s.sessions.size).toBe(1);
+    // Past the watcher's settle reload, so only the watcher itself can notice the edit.
+    await new Promise((r) => setTimeout(r, WATCH_SETTLE_MS + 300));
+    await ids(kept.c, "deploy");
+    const page = join(root, "knowledge/runbooks/deploy-production.md");
+    writeFileSync(page, `${readFileSync(page, "utf8")}\nThe zebracorn step.\n`);
+    await expect.poll(() => ids(kept.c, "zebracorn"), { timeout: 5000 }).toContain("rb-deploy-prod");
+    await kept.c.close();
+  });
+
+  it("follows a moved knowledge root, so an edit under the new one reaches an open session", async () => {
+    const { s, root } = await serve();
+    const { c } = await client(s.port);
+    mkdirSync(join(root, "docs-kb"));
+    cpSync(join(root, "knowledge"), join(root, "docs-kb"), { recursive: true });
+    const cfg = join(root, ".knowledge/config.yaml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace("knowledge_root: knowledge", "knowledge_root: docs-kb"));
+    // Ownership moves with it, or the moved pages would be unowned and never citable.
+    const co = join(root, "CODEOWNERS");
+    writeFileSync(co, readFileSync(co, "utf8").replaceAll("/knowledge/", "/docs-kb/"));
+    const later = new Date(Date.now() + 5000);
+    utimesSync(cfg, later, later);
+    utimesSync(co, later, later);
+    await ids(c, "deploy"); // the config change is read on this call
+    expect(s.sessions.loader.watchedDir).toBe(join(root, "docs-kb"));
+    await new Promise((r) => setTimeout(r, WATCH_SETTLE_MS + 300));
+    await ids(c, "deploy");
+    const page = join(root, "docs-kb/runbooks/deploy-production.md");
+    writeFileSync(page, `${readFileSync(page, "utf8")}\nThe quokkafish step.\n`);
+    await expect.poll(() => ids(c, "quokkafish"), { timeout: 5000 }).toContain("rb-deploy-prod");
     await c.close();
   });
 });

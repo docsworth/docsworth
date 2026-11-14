@@ -90,6 +90,12 @@ describe("web app views against a real serve (R13)", () => {
     assertNoHiddenPage(root);
   });
 
+  it("search: snippets cut from the page as a reader sees it, names as written", async () => {
+    const root = await open("/search?q=insufficient%20balance%20refund", "Refund failures");
+    // Asked as text: `insufficient_balance` keeps its underscore (a markdown snippet lost it).
+    await vi.waitFor(() => expect(root.querySelector(".dw-result p")?.textContent).toContain("For insufficient_balance, do not retry"));
+  });
+
   it("page: rendered safely, links routed in-app, the hidden link shown as a placeholder, adding explained", async () => {
     const root = await open("/p/svc-payments", "Payments API");
     await vi.waitFor(() => expect(root.querySelector(".dw-prose")).not.toBeNull());
@@ -117,10 +123,122 @@ describe("web app views against a real serve (R13)", () => {
     assertNoHiddenPage(root);
   });
 
+  it("team: what needs review first, retired pages last, and a link to its graph", async () => {
+    const root = await open("/t/platform", "pages owned by this team");
+    await vi.waitFor(() => expect(root.querySelectorAll(".dw-result").length).toBeGreaterThan(5));
+    const titles = [...root.querySelectorAll(".dw-result h3")].map((h) => h.textContent);
+    // As of 2026-11-02: overdue since 10-30, then due 11-14, then the rest by due date (2027-01-03,
+    // 2027-01-06, …; by title the ADRs would come first); the deprecated Jenkins page last.
+    expect(titles.slice(0, 4)).toEqual(["Scale the Kubernetes cluster", "Rotate TLS certificates", "Restore a Postgres backup", "Cut a hotfix"]);
+    expect(titles.at(-1)).toBe("Deploy with Jenkins (legacy)");
+    const graph = [...root.querySelectorAll<HTMLAnchorElement>("main a")].find((a) => a.textContent === "Its link graph");
+    expect(graph?.getAttribute("href")).toBe("/graph?team=platform");
+  });
+
   it("graph: a node per visible page, none hidden", async () => {
     const root = await open("/graph", "Link graph");
     await vi.waitFor(() => expect(root.querySelectorAll("svg circle[data-id]").length).toBe(21));
     assertNoHiddenPage(root);
+  });
+
+  it("graph: one team's pages, with the other teams a click away", async () => {
+    const acme = copyAcme();
+    const platform = loadRepo(acme.root).pages.filter((p) => p.owner_team === "platform" && p.acl === "internal");
+    acme.cleanup();
+    const root = await open("/graph?team=platform", "Link graph: platform");
+    await vi.waitFor(() => expect(root.querySelectorAll("svg circle[data-id]").length).toBe(platform.length));
+    expect(root.textContent).toContain(`${platform.length} pages owned by platform`);
+    const links = [...root.querySelectorAll<HTMLAnchorElement>(".dw-teams a")].map((a) => [a.textContent, a.getAttribute("href")]);
+    expect(links[0]).toEqual(["All teams", "/graph"]);
+    expect(links).toContainEqual(["devex (4)", "/graph?team=devex"]);
+    expect(root.querySelector(".dw-teams strong")?.textContent).toBe(`platform (${platform.length})`);
+    assertNoHiddenPage(root);
+  });
+
+  it("graph: past the limit, asks the server for the most-linked pages and offers each team", async () => {
+    // A stand-in server with a repo far past the limit: what the view asks for and says.
+    const asked: [string, Record<string, unknown>][] = [];
+    const nodes = ["a", "b"].map((id) => ({ id, title: `Page ${id}`, path: `knowledge/${id}.md`, type: "runbook", status: "canonical", owner_team: "data", last_verified: "2026-10-01", due: null, sla_state: "ok", citable: true, has_restricted_links: false }));
+    const answers: Record<string, unknown> = {
+      ui_capabilities: { mode: "local", login: null, org: "acme", repo: null, writes: false, write_tools: [], teams: [], pro: [] },
+      ui_graph: { nodes, edges: [{ from: "a", to: "b" }], total: 2700, teams: [{ team: "data", pages: 300 }, { team: "web", pages: 2400 }] },
+    };
+    const stub = { call: async (tool: string, args: Record<string, unknown> = {}) => (asked.push([tool, args]), answers[tool]) } as unknown as DocsworthClient;
+    (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM.setURL("http://127.0.0.1:1/graph");
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    render(<App client={stub} />, container);
+    await vi.waitFor(() => expect(container.textContent).toContain("The 2 most-linked of the 2700 pages you can see, and the 1 link among them."));
+    expect(asked).toContainEqual(["ui_graph", { max_nodes: 150 }]);
+    expect([...container.querySelectorAll<HTMLAnchorElement>(".dw-teams a")].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+      ["data (300)", "/graph?team=data"],
+      ["web (2400)", "/graph?team=web"],
+    ]);
+    expect(container.querySelectorAll("svg circle[data-id]")).toHaveLength(2);
+  });
+
+  it("overview: past 20, the first of each list and a way to see all of them", async () => {
+    const asked: Record<string, unknown>[] = [];
+    const entry = (i: number) => ({ id: `old-${i}`, title: `Old ${i}`, path: `knowledge/old-${i}.md`, owner_team: "data", status: "canonical", due: "2026-07-01", reason: "overdue", detail: "due 2026-07-01, 134 days ago" });
+    const overview = (n: number) => ({
+      as_of: "2026-11-12",
+      totals: { pages: 2700, citable: 2200, overdue: 300, due_soon: 0, draft: 0, deprecated: 0 },
+      teams: [{ team: "data", pages: 2700, citable: 2200, overdue: 300, due_soon: 0 }],
+      due_soon: [],
+      stale: Array.from({ length: n }, (_, i) => entry(i)),
+      due_soon_total: 0,
+      stale_total: 300,
+    });
+    const stub = {
+      call: async (tool: string, args: Record<string, unknown> = {}) => {
+        if (tool === "ui_capabilities") return { mode: "local", login: null, org: "acme", repo: null, writes: false, write_tools: [], teams: [], pro: [] };
+        asked.push(args);
+        return overview(args.list_limit === undefined ? 300 : (args.list_limit as number));
+      },
+    } as unknown as DocsworthClient;
+    (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM.setURL("http://127.0.0.1:1/");
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    render(<App client={stub} />, container);
+    await vi.waitFor(() => expect(container.textContent).toContain("The first 20 of 300."));
+    expect(asked).toEqual([{ list_limit: 20 }]);
+    expect(container.querySelectorAll(".dw-table tbody tr").length).toBe(20 + 1); // and the team row
+    [...container.querySelectorAll("button")].find((b) => b.textContent === "Show all 300")!.click();
+    await vi.waitFor(() => expect(container.querySelectorAll(".dw-table tbody tr").length).toBe(300 + 1));
+    expect(asked).toEqual([{ list_limit: 20 }, {}]);
+    expect(container.textContent).not.toContain("The first 20");
+  });
+
+  it("overview: says how many files couldn't be read as pages, and where to find out why", async () => {
+    const overview = (skipped: number) => ({
+      as_of: "2026-11-12",
+      totals: { pages: 21, citable: 16, overdue: 0, due_soon: 0, draft: 0, deprecated: 0 },
+      teams: [],
+      due_soon: [],
+      stale: [],
+      skipped_files: skipped,
+    });
+    for (const [skipped, says] of [
+      [3, "3 files under the knowledge root couldn't be read as pages, so nothing here shows them. docsworth lint lists them and says why."],
+      [1, "1 file under the knowledge root couldn't be read as a page, so nothing here shows it. docsworth lint lists it and says why."],
+      [0, null],
+    ] as const) {
+      const stub = {
+        call: async (tool: string) =>
+          tool === "ui_capabilities" ? { mode: "local", login: null, org: "acme", repo: null, writes: false, write_tools: [], teams: [], pro: [] } : overview(skipped),
+      } as unknown as DocsworthClient;
+      (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM.setURL("http://127.0.0.1:1/");
+      container = document.createElement("div");
+      document.body.appendChild(container);
+      render(<App client={stub} />, container);
+      await vi.waitFor(() => expect(container.textContent).toContain("Knowledge overview"));
+      const note = [...container.querySelectorAll(".dw-note")].map((n) => n.textContent).find((t) => /couldn't be read/.test(t ?? ""));
+      expect(note ?? null).toBe(says);
+      render(null, container);
+      container.remove();
+    }
+    container = document.createElement("div"); // for afterEach
+    document.body.appendChild(container);
   });
 
   it("capture: owners offered, and why drafting is off in local mode", async () => {

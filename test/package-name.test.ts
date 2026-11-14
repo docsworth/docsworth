@@ -53,14 +53,14 @@ describe("only our package is ever fetched", () => {
   });
 
   it("is @docsworth/cli, in the range of this version", () => {
-    expect(PUBLISHED_PACKAGE).toBe("@docsworth/cli@^0.2");
+    expect(PUBLISHED_PACKAGE).toBe("@docsworth/cli@^0.3");
   });
 
   it("docsworth init --ci runs the published package unless told another", () => {
     const root = fresh();
     initRepo(root, { org: "acme", team: "platform", ci: true, now: NOW });
     const wf = readFileSync(join(root, ".github/workflows/knowledge.yml"), "utf8");
-    expect(wf.match(/npx -y \S+/g)).toEqual(Array(4).fill('npx -y "@docsworth/cli@^0.2"'));
+    expect(wf.match(/npx -y \S+/g)).toEqual(Array(4).fill('npx -y "@docsworth/cli@^0.3"'));
   });
 
   it("docsworth init --ci refuses a package we don't own, before writing anything", () => {
@@ -102,7 +102,7 @@ describe("only our package is ever fetched", () => {
       const kb = join(realpathSync(fresh()), "R&D kb");
       mkdirSync(kb);
       const r = launch({ ...env, DOCSWORTH_KNOWLEDGE_DIR: kb });
-      expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 0, stdout: `npx -y @docsworth/cli@^0.2 mcp|${home}|${kb}\n` });
+      expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 0, stdout: `npx -y @docsworth/cli@^0.3 mcp|${home}|${kb}\n` });
     });
 
     it("reads the repo as a path from where it runs, a leading ~ as home, and defaults to the project", () => {
@@ -123,7 +123,7 @@ describe("only our package is ever fetched", () => {
       mkdirSync(kb);
       const asWindows = (more: Record<string, string>) => launch({ ...env, comspec: "cmd", DOCSWORTH_KNOWLEDGE_DIR: kb, ...more }, undefined, win);
       const npx = asWindows({});
-      expect({ status: npx.status, stdout: npx.stdout }).toEqual({ status: 0, stdout: '/d\n/s\n/c\n""npx" "-y" "@docsworth/cli@^0.2" "mcp""\n' });
+      expect({ status: npx.status, stdout: npx.stdout }).toEqual({ status: 0, stdout: '/d\n/s\n/c\n""npx" "-y" "@docsworth/cli@^0.3" "mcp""\n' });
       const bin = asWindows({ DOCSWORTH_BIN: "C:\\Program Files\\docsworth\\docsworth.cmd" });
       expect(bin.stdout).toBe('/d\n/s\n/c\n""C:\\Program Files\\docsworth\\docsworth.cmd" "mcp""\n');
       for (const odd of ["C:\\Tools\\%SDK%\\docsworth.cmd", "C:\\Tools\\!stable!\\docsworth.cmd", 'C:\\Tools\\docsworth.cmd" & calc & "', "C:\\missing\r\ncalc.exe\r\nrem "]) {

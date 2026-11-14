@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { UserError } from "./errors.js";
@@ -29,9 +29,51 @@ const MirrorSourceSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/**
+ * A directory in the repo, in one spelling: `knowledge/`, `./knowledge` and `knowledge//` are
+ * `knowledge`, since paths join to it and a trailing slash would double. It's named relative to
+ * the repo, which redaction and CODEOWNERS paths are built on: the repo itself (`.`, or `/`,
+ * which a join makes the same), a directory above it, an absolute path and a Windows separator
+ * are refused. So are git's own directory (a ref named `x.md` is a file adopt would write) and
+ * Docsworth's state.
+ */
+function repoDir(what: string) {
+  return z
+    .string()
+    .transform((s) => posix.normalize(s).replace(/(.)\/+$/, "$1"))
+    .refine(
+      (s) => s !== "." && s !== ".." && !s.startsWith("../") && !s.startsWith("/") && !/^[A-Za-z]:/.test(s) && !s.includes("\\"),
+      `${what} is a directory in the repo, named relative to it: not the repo itself (.), not above it (..), not absolute; such as \`knowledge\``,
+    )
+    .refine(
+      (s) => !s.split("/").some((seg) => seg.toLowerCase() === ".git") && !/^\.knowledge(\/|$)/i.test(s),
+      `${what} can't be in git's own directory (.git) or Docsworth's (.knowledge)`,
+    );
+}
+
 export const ConfigSchema = z.object({
   format: z.literal(1).default(1),
-  knowledge_root: z.string().default("knowledge"),
+  knowledge_root: repoDir("the knowledge root").default("knowledge"),
+  /**
+   * Directories a docs site serves at its root (Docusaurus's `static/`): lint reads a
+   * root-relative attachment link (`/img/x.png`) from them too.
+   */
+  static_dirs: z.array(repoDir("a static directory")).default([]),
+  /**
+   * Where the team's docs site serves the pages, as `https://docs.example.com/docs/`.
+   * Redaction reads a link to a URL under it as the route it names.
+   */
+  site_url: z
+    .string()
+    .url()
+    .superRefine((u, ctx) => {
+      // `.url()` has reported a value that isn't one; this runs all the same.
+      const at = URL.canParse(u) ? new URL(u) : undefined;
+      if (!at) return;
+      if (at.protocol !== "https:" && at.protocol !== "http:") ctx.addIssue({ code: "custom", message: "site_url must be an http or https URL" });
+      else if (at.username || at.password || at.search || at.hash) ctx.addIssue({ code: "custom", message: "site_url is an origin and a path, with no credentials, query or fragment" });
+    })
+    .optional(),
   github: z.object({
     /** Team owners resolve to @<org>/<team>. Required even for local-only repos. */
     org: z.string().min(1).transform((s) => s.toLowerCase()),
@@ -71,6 +113,12 @@ export const ConfigSchema = z.object({
     .refine((a) => !a.required || a.enabled, { message: "audit_log.required needs audit_log.enabled: true (otherwise nothing is audited)" })
     .default({ enabled: false, include_queries: false, required: false, retention_days: 365 }),
   skills: z.object({ out_dir: z.string().default("skills") }).default({ out_dir: "skills" }),
+  /** Keys a site generator keeps in frontmatter (Docusaurus's `sidebar_position`, say): lint doesn't warn on them. */
+  frontmatter: z
+    .object({ extra_fields: z.array(z.string().min(1)).default([]) })
+    // `extra_field:` must fail, not quietly leave every key warned on.
+    .strict()
+    .default({ extra_fields: [] }),
   mirror: z
     .object({
       out_dir: z.string().default(".knowledge/mirror"),

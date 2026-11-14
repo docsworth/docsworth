@@ -23,14 +23,17 @@ import {
   type WriteResult,
 } from "@docsworth/ui";
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { Mode } from "../capture.js";
 import { type Pending, PENDING_TTL_MS } from "../contract.js";
 import type { Taken } from "../pending.js";
 
-// The side panel: search, read, add to a page, and draft one from a capture (the Gmail button
-// or the context menu). Like a web-app tab, it asks the server only for what it shows, in its
-// own session, so its taint follows what it showed. A capture only fills a draft: nothing is
-// written until you submit a form. A capture stays stored until the panel is done with it
-// (its draft is a PR, or the panel moved on), so a reload doesn't lose it.
+// The side panel: search, read, add to a page, and save a capture (the panel's Save buttons,
+// the context menu or the Gmail button) as an addition to a page or a new draft. Like a
+// web-app tab, it asks the server only for what it shows, in its own session, so its taint
+// follows what it showed. A capture only fills a form, and only as its values: nothing is
+// written until you submit one. A capture from the worker stays stored until the panel is done
+// with it (its form became a PR, or the panel moved on), so a reload doesn't lose it; one made
+// here by a Save button lives only in this panel.
 
 export type PanelEnv = {
   /** Null until the extension is connected (options page). */
@@ -46,6 +49,8 @@ export type PanelEnv = {
   openOptions: () => void;
   /** Ends this window's session and reloads the panel, as opening a new tab would. */
   newSession: () => void;
+  /** Reads this window's active tab (its main content, or its selection) as a capture. */
+  capture: (mode: Mode) => Promise<Pending>;
   extensionId: string;
 };
 
@@ -67,6 +72,8 @@ export function viewFor(href: string): View | null {
 /** Within its ten minutes now: a capture past them is never shown, whatever the events say. */
 const fresh = (t: Taken) => Date.now() - t.capture.at <= PENDING_TTL_MS;
 const firstLine = (s: string) => s.trim().split("\n")[0]!.slice(0, 120);
+/** An address a draft may name as its source, and an addition may link to. */
+const WEB = /^https?:\/\/[^\s<>]+$/;
 /** A subject as a search: without the reply and forward marks. */
 const asQuery = (s: string) => s.replace(/^(\s*(re|fwd?|aw|wg)\s*:\s*)+/i, "").trim();
 
@@ -129,6 +136,8 @@ function Connected({ client, env }: { client: DocsworthClient; env: PanelEnv }) 
     show(live[0] ?? null);
     setWaiting(live.slice(1));
   };
+  // A capture made here, by a Save button: never stored, so nothing to be done with.
+  const captured = (capture: Pending) => show({ key: `local:${crypto.randomUUID()}`, capture });
 
   const c = caps.data;
   let body;
@@ -153,6 +162,7 @@ function Connected({ client, env }: { client: DocsworthClient; env: PanelEnv }) 
         )}
       </header>
       <main class="dw-main">
+        {c && <SaveBar capture={env.capture} onCaptured={captured} />}
         {waiting.length > 0 && (
           <div class="dw-note" role="status">
             {waiting.length === 1 ? "Another capture is waiting." : `${waiting.length} more captures are waiting.`}{" "}
@@ -169,6 +179,49 @@ function Connected({ client, env }: { client: DocsworthClient; env: PanelEnv }) 
           </button>
         </p>
       </main>
+    </div>
+  );
+}
+
+/** Chrome kept the tab from the extension: it has no activeTab there. */
+const UNREADABLE = /Cannot access|must request permission|cannot be scripted|chrome:\/\//i;
+
+/** Why the tab couldn't be read, and what would let it be. */
+export function readError(err: unknown): string {
+  const m = err instanceof Error ? err.message : String(err);
+  if (UNREADABLE.test(m))
+    return "Docsworth can't read this tab yet. To let it, click the Docsworth button in the toolbar while you're on it, then try again, or right-click the page and choose Save page to Docsworth. Chrome doesn't let extensions read some pages at all, such as the Web Store and chrome:// pages.";
+  return `Couldn't read the tab: ${m}`;
+}
+
+/** Save this window's tab: its main content, or what's selected in it. */
+function SaveBar({ capture, onCaptured }: { capture: (mode: Mode) => Promise<Pending>; onCaptured: (c: Pending) => void }) {
+  const [busy, setBusy] = useState<Mode | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const save = async (mode: Mode) => {
+    setBusy(mode);
+    setError(null);
+    try {
+      onCaptured(await capture(mode));
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div class="dw-save">
+      <button type="button" class="secondary" disabled={busy !== null} onClick={() => void save("page")}>
+        {busy === "page" ? "Reading the page…" : "Save this page"}
+      </button>{" "}
+      <button type="button" class="secondary" disabled={busy !== null} onClick={() => void save("selection")}>
+        {busy === "selection" ? "Reading the selection…" : "Save the selection"}
+      </button>
+      {error && (
+        <div class="dw-note" role="alert">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -200,9 +253,9 @@ function SearchView({ client, q, navigate }: { client: DocsworthClient; q: strin
   );
 }
 
-function SearchResults({ client, q, navigate, limit = 10 }: { client: DocsworthClient; q: string; navigate: Navigate; limit?: number }) {
-  const call = useCall(() => client.call<SearchResponse>("search", { query: q, limit }), `${q}:${limit}`);
-  return <Loaded call={call}>{(r) => <ResultList response={r} navigate={navigate} />}</Loaded>;
+function SearchResults({ client, q, navigate, limit = 10, action }: { client: DocsworthClient; q: string; navigate: Navigate; limit?: number; action?: Parameters<typeof ResultList>[0]["action"] }) {
+  const call = useCall(() => client.call<SearchResponse>("search", { query: q, limit, snippets: "text" }), `${q}:${limit}`);
+  return <Loaded call={call}>{(r) => <ResultList response={r} navigate={navigate} action={action} />}</Loaded>;
 }
 
 function PageRoute({ client, caps, id, navigate }: { client: DocsworthClient; caps: Capabilities | null; id: string; navigate: Navigate }) {
@@ -257,23 +310,61 @@ function TeamView({ client, team, navigate }: { client: DocsworthClient; team: s
 }
 
 /**
- * A capture: the pages it may already be written down in, then a draft filled from it. A
- * Gmail thread's address goes nowhere (it means nothing to anyone else); a page's goes in as
- * the draft's source.
+ * A capture: the pages it may already be written down in, each of which it can be added to,
+ * then a draft of a new page filled from it. A Gmail thread's address goes nowhere (it means
+ * nothing to anyone else); a page's goes in as the draft's source, and as the first line of an
+ * addition. The capture is only ever these forms' values.
  */
 export function CaptureView({ client, caps, capture, navigate, onDrafted }: { client: DocsworthClient; caps: Capabilities | null; capture: Pending; navigate: Navigate; onDrafted: () => void }) {
+  const [target, setTarget] = useState<{ id: string; title: string } | null>(null);
   const title = capture.title.trim() || firstLine(capture.text);
+  const web = capture.source !== "gmail" && WEB.test(capture.url);
   const initial: Partial<DraftInput> = {
+    type: capture.source === "gmail" ? "runbook" : "guide",
     title: title.slice(0, 200),
     body: capture.text,
     reason: capture.source === "gmail" ? "Written down from an email thread" : "Saved from a page",
-    ...(capture.source === "selection" && /^https?:\/\//.test(capture.url) ? { source_url: capture.url } : {}),
+    ...(web ? { source_url: capture.url } : {}),
   };
+  const addition = `${web ? `> Captured from <${capture.url}> on ${new Date().toISOString().slice(0, 10)}.\n\n` : ""}${capture.text}`;
   return (
     <>
       <h1>{capture.source === "gmail" ? "From Gmail" : "From a page"}</h1>
+      {capture.note && (
+        <div class="dw-note" role="status">
+          {capture.note}
+        </div>
+      )}
       <h2>Already written down?</h2>
-      <SearchResults client={client} q={asQuery(title) || title} navigate={navigate} limit={5} />
+      {target ? (
+        <>
+          <AppendForm
+            caps={caps}
+            pageTitle={target.title}
+            initial={addition}
+            onSubmit={async (append, reason) => {
+              const proposed = await client.call<WriteResult>("propose_edit", { id: target.id, append, reason });
+              onDrafted();
+              return proposed;
+            }}
+          />
+          <button type="button" class="secondary" onClick={() => setTarget(null)}>
+            Choose another page
+          </button>
+        </>
+      ) : (
+        <SearchResults
+          client={client}
+          q={asQuery(title) || title}
+          navigate={navigate}
+          limit={5}
+          action={(p) => (
+            <button type="button" class="secondary" data-add-to={p.id} onClick={() => setTarget({ id: p.id, title: p.title })}>
+              Add the capture here
+            </button>
+          )}
+        />
+      )}
       <h2>Draft a page from it</h2>
       <CaptureForm
         caps={caps}

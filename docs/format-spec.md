@@ -22,6 +22,10 @@ CODEOWNERS                     # or .github/CODEOWNERS or docs/CODEOWNERS
 ```
 
 Every `.md` file under the knowledge root is a page, and every page has frontmatter.
+Inside the knowledge root, a directory whose name starts with a dot (an editor's
+`.obsidian/`, say) is skipped, with everything in it: its files are neither pages nor lint
+errors. The knowledge root itself is read whatever its name, and a file whose name starts
+with a dot is a page like any other.
 
 ## Frontmatter
 
@@ -45,7 +49,30 @@ description: One sentence.    # optional; used in search and compiled skills
 ---
 ```
 
-Unknown fields produce a lint warning, never an error.
+Unknown fields produce a lint warning, never an error, unless the config lists them in
+`frontmatter.extra_fields`: keys a site generator keeps there, such as Docusaurus's
+`sidebar_position`.
+
+## Links
+
+Lint reads a page's links as CommonMark reads them. A `[x](y)` in code (a fenced or
+indented block, or a code span) or in HTML is no link. A reference link counts through its
+definition, and a definition no link uses is invisible.
+
+A relative link must resolve inside the repo. Under the knowledge root it must name a page
+(`.md`) or an attachment (a file with an extension, such as `diagram.png`). A link to a
+directory, or to a file with no extension, is an error: it names no page, and a route like
+Docusaurus's `/guides/setup` reads as one. Link the page itself (`guides/setup.md`).
+
+A root-relative link to an attachment (`/img/x.png`) that names no file of the repo's
+resolves in the directories `static_dirs` lists, as a docs site serves them (Docusaurus's
+`static/`). A page never does: pages are under the knowledge root.
+
+A root-relative link (`/docs`) is an error too when it names a directory or a file with no
+extension outside the knowledge root, and, read from the knowledge root as a docs site
+serves it (with or without a leading `docs/`, a number prefix, or a page's own `slug` or `id`),
+also names a page. The repo's file and the page both answer to it. Link the one you mean,
+with its extension.
 
 ## Ownership
 
@@ -104,6 +131,13 @@ In a page the caller can see, a reference to a page they can't see (a link in an
 a URL, or its path in text) reads `[restricted page]`. A page that doesn't load counts as
 one they can't see, and so does a link to a path under the knowledge root that is no page
 at all: relative, or, with `github.repo` set, a GitHub URL into the repo on any branch.
+
+Links are also read as a docs site serves them. A link to a hidden page's route reads
+`[restricted page]` too: by its `slug`, by an `id` other than its file name, by its path
+without number prefixes, or by its file's stem. So does a link without an extension that
+names no page, file or directory in the repo (`/guides/gone`), for every reader. With
+`site_url` set, a URL on the docs site counts as the route it names. A route written in
+plain text, not as a link, is served as written.
 See [security-model.md](security-model.md#the-one-read-path).
 
 **`acl` isn't confidentiality.** GitHub has no per-file read permissions, so anyone with
@@ -266,7 +300,9 @@ or `applies_to` leave mirrored pages out; `owner_team` applies to them.
 
 ```yaml
 format: 1
-knowledge_root: knowledge
+knowledge_root: knowledge     # a directory in the repo, named relative to it: not . or .., not absolute, not in .git or .knowledge; a trailing slash is ignored
+static_dirs: [website/static] # optional: directories a docs site serves at its root; lint reads /img/x.png there too
+site_url: https://docs.example.com/docs/  # optional: where a docs site serves the pages; redaction reads a URL under it as a route
 github:
   org: acme                 # required: team owners resolve to @acme/<team>
   repo: acme/knowledge      # optional: makes GitHub the ACL authority; enables PR tools
@@ -275,6 +311,8 @@ github:
 sla:
   due_soon_days: 14
 usage_log: true             # page-id-only read log for the owner digest
+frontmatter:
+  extra_fields: [sidebar_label, sidebar_position]   # keys a site generator keeps in frontmatter; lint doesn't warn on them
 audit_log:                  # attributed audit log; off unless enabled
   enabled: true
   dir: /var/lib/docsworth/audit   # optional; default $XDG_STATE_HOME/docsworth/<repo>-<hash>/audit
