@@ -1174,13 +1174,18 @@ describe("link redaction: input size", () => {
 
   // At 64 KB a quadratic pass can still finish under 250 ms (a definition's label looked up
   // backwards took 234 ms there, and 2.9 s at 256 KB): so at 256 KB, against a bound a linear
-  // pass meets many times over (about 0.2 s).
+  // pass meets many times over (about 0.25 s here). A slow CI runner under the suite's load
+  // took a linear pass to 2 s (public main, 2026-11-14), so past the bound it's held against
+  // prose of the same size on the same runner, as at 64 KB: about 3× when linear.
   it.each([
     ["definitions that never end", "]:a"],
     ["definitions after a bracket", "[x]:a "],
-  ])("%s, at 256 KB: under 1.5 s", (what, unit) => {
-    const text = unit.repeat(Math.ceil((4 * N) / unit.length)).slice(0, 4 * N);
-    expect(best(text), what).toBeLessThan(1500);
+  ])("%s, at 256 KB: under 1.5 s, or within 10× of prose", (what, unit) => {
+    const size = (u: string) => u.repeat(Math.ceil((4 * N) / u.length)).slice(0, 4 * N);
+    const hostile = best(size(unit));
+    if (hostile < 1500) return;
+    const benign = best(size(`Some prose about deploys, with a [link](${"deploy-production.md"}) & 50% more.\n`));
+    expect(hostile, `${what}: ${Math.round(hostile)} ms against ${Math.round(benign)} ms`).toBeLessThan(10 * benign);
   });
 
   // Code review, round 6: each reference's paragraph was looked up among all of them. At
