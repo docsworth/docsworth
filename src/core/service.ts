@@ -666,8 +666,12 @@ export class KnowledgeService {
   // policy, works over visiblePages like every read, and taints the session with exactly
   // the restricted pages its response names, as `list` does.
 
-  /** Who is served and whether writes would work, for the app's header and settings. */
-  async uiCapabilities(opts: { pro?: string[] } = {}) {
+  /**
+   * Who is served, whether writes would work, and what pro adds, for the app's header and
+   * settings: `pro`, the panels pro supplies (none yet), and `pro_commands`, its commands
+   * when pro loads beside the server.
+   */
+  async uiCapabilities(opts: { pro?: string[]; proCommands?: readonly string[] } = {}) {
     const who = await this.identity.get();
     this.permit("ui_capabilities", who);
     const repo = this.current();
@@ -702,6 +706,7 @@ export class KnowledgeService {
       teams,
       ...(writesOff ? { writes_off: writesOff } : {}),
       pro: opts.pro ?? [],
+      pro_commands: [...(opts.proCommands ?? [])],
     };
   }
 

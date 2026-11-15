@@ -152,8 +152,10 @@ function OverviewView({ client, caps, navigate }: { client: DocsworthClient; cap
           <h2>Stale or unowned</h2>
           <StaleTable entries={o.stale} navigate={navigate} />
           {more(o.stale.length, o.stale_total)}
-          {(caps?.pro.length ?? 0) === 0 && (
-            <div class="dw-note">Coverage history, the SLA timeline, usage and access panels are part of Docsworth pro.</div>
+          {caps && !caps.pro_commands?.length && (
+            <div class="dw-note">
+              Docsworth pro adds each team's review digest, an ownership dashboard, admin reports (audit, access review, usage), runbooks compiled into agent skills, and a read-only Confluence and Notion mirror.
+            </div>
           )}
         </>
       )}
@@ -325,8 +327,8 @@ function SettingsView({ caps }: { caps?: Capabilities }) {
             <td>{caps.writes ? caps.write_tools.join(", ") : caps.writes_off}</td>
           </tr>
           <tr>
-            <th scope="row">Pro panels</th>
-            <td>{caps.pro.length ? caps.pro.join(", ") : "not installed"}</td>
+            <th scope="row">Docsworth pro</th>
+            <td>{caps.pro_commands?.length ? `installed: ${caps.pro_commands.join(", ")}` : "not installed"}</td>
           </tr>
         </tbody>
       </table>

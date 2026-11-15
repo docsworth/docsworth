@@ -82,7 +82,7 @@ multiple IdPs, a web editor, and writing back to Confluence, Notion or Google.
 | Writes to the default branch | never makes one | enforces branch protection and code-owner review | turns them on |
 | Sign-in, MFA, SSO | uses whatever token GitHub accepts | enforces SSO on tokens | configures the IdP and the org |
 | Audit | writes events, fails closed when required | keeps its own audit log of repo activity | runs the SIEM, keeps the copy |
-| Mirrored Confluence and Notion content | reads with the configured account, skips restricted pages, never writes back | | chooses the service account and its access |
+| Mirrored Confluence and Notion content | reads with the configured account, skips Confluence pages with read restrictions (on Notion, sharing with the integration is the only boundary), never writes back | | chooses the service account and its access |
 | Model provider | makes no model calls (except the opt-in benchmark) | | chooses the agent client and its provider, which receive tool output |
 | Machines | | | disk encryption, backups, who may run the server |
 

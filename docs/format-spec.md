@@ -268,8 +268,10 @@ Mirrored pages live under `mirror.out_dir` (default `.knowledge/mirror/`), never
 the knowledge root, and are never citable. Each file carries a `mirror:` frontmatter block
 (source, native id, url, `last_edited`, versions, `owner_team` from a `team-<slug>` or
 `owner-<slug>` label, labels, acl). Each source and space directory also holds
-`_scores.json` and `_report.json`. Pages with read restrictions in the source, and their
-descendants, are never written, and the report lists them by native id only.
+`_scores.json` and `_report.json`. Confluence pages with read restrictions, and their
+descendants, are never written, and the report lists them by native id only. On Notion,
+sharing is the only boundary: any page shared with the integration (under `root_page_ids`,
+if set) can be written.
 
 **Serving the mirror** (`mirror.serve: true`, off by default, and not yet recommended:
 on the benchmark it was neutral on answer questions but just missed its bar on gate

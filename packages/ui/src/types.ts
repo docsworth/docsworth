@@ -121,7 +121,10 @@ export interface Capabilities {
   writes_off?: string;
   /** Teams the app may offer as a new page's owner (names only). */
   teams: string[];
+  /** The panels Docsworth pro supplies to the overview: none yet. */
   pro: string[];
+  /** Docsworth pro's commands when pro is installed beside the server and loads; empty otherwise. Absent from a server before 0.3.2. */
+  pro_commands?: string[];
 }
 
 export interface WriteResult {

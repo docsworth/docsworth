@@ -7,6 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { Identity } from "../src/core/acl.js";
 import { AUDIT_MARKER, type AuditEvent, AuditLog, type AuditSink, createAuditLog, defaultAuditDir, FileSink, resolveAuditDir, writeAll } from "../src/core/audit-log.js";
 import { ConfigSchema, loadConfig } from "../src/core/config.js";
@@ -832,6 +833,10 @@ describe("where the audit log lives", () => {
   it("is off unless enabled, so v0.1 behaviour is unchanged", () => {
     const acme = copyAcme();
     cleanups.push(acme.cleanup);
+    // A config that never mentions audit_log, as v0.1's didn't (the example turns it on).
+    const cfgFile = join(acme.root, ".knowledge/config.yaml");
+    const { audit_log: _, ...v01 } = parseYaml(readFileSync(cfgFile, "utf8")) as Record<string, unknown>;
+    writeFileSync(cfgFile, stringifyYaml(v01));
     const config = loadConfig(acme.root);
     expect(config.audit_log.enabled).toBe(false);
     expect(createAuditLog(acme.root, config)).toBeNull();
@@ -845,7 +850,7 @@ describe("docsworth mcp with the audit log on (real entry point)", () => {
     const state = mkdtempSync(join(tmpdir(), "docsworth-state-"));
     cleanups.push(() => rmSync(state, { recursive: true, force: true }));
     const cfgFile = join(acme.root, ".knowledge/config.yaml");
-    writeFileSync(cfgFile, `${readFileSync(cfgFile, "utf8")}audit_log:\n  enabled: true\n  required: true\n`);
+    writeFileSync(cfgFile, stringifyYaml({ ...(parseYaml(readFileSync(cfgFile, "utf8")) as Record<string, unknown>), audit_log: { enabled: true, required: true } }));
     const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCSWORTH_NO_GH_CLI: "1", XDG_STATE_HOME: state };
     const client = new Client({ name: "docsworth-e2e", version: "0" });
     await client.connect(new StdioClientTransport({ command: "npx", args: ["tsx", "src/cli.ts", "--as-of", "2026-11-02", "mcp", acme.root], env, stderr: "ignore" }));

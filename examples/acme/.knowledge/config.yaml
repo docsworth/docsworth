@@ -10,6 +10,11 @@ github:
 sla:
   due_soon_days: 14
 usage_log: true
+# Every tool call is audited (page ids, no query text), so `docsworth usage-report` has
+# something to show once you've used the example. With no `dir`, the log is kept in your
+# state directory, outside this checkout.
+audit_log:
+  enabled: true
 skills:
   out_dir: skills
 mirror:
