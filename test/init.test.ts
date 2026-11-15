@@ -43,11 +43,14 @@ describe("docsworth init: R23", () => {
     expect(loadRepo(root).config.github.repo).toBe("acme/kb");
   });
 
-  it("ships a CI workflow that parses and never runs compile on pull requests", () => {
-    const wf = parseYaml(readFileSync("templates/github/knowledge.yml", "utf8")) as { jobs: Record<string, { if: string; steps: { run?: string }[] }> };
-    expect(wf.jobs.lint!.if).toBe("github.event_name == 'pull_request'");
-    expect(wf.jobs.lint!.steps.map((s) => s.run).filter(Boolean)).toEqual(['npx -y "__DOCSWORTH_PACKAGE__" lint .', 'npx -y "__DOCSWORTH_PACKAGE__" compile . --dry-run']);
-    expect(wf.jobs.compile!.if).toBe("github.event_name == 'push'");
+  it("ships a CI workflow that parses, lints, and runs no pro command", () => {
+    // CI runs the published CLI through npx, which has no pro: `compile` there exited 2 on
+    // every push and PR. test/package.test.ts runs each step against the packed CLI.
+    const wf = parseYaml(readFileSync("templates/github/knowledge.yml", "utf8")) as { permissions: unknown; jobs: Record<string, { if?: string; steps: { run?: string }[] }> };
+    expect(Object.keys(wf.jobs)).toEqual(["lint"]);
+    expect(wf.jobs.lint!.if).toBeUndefined();
+    expect(wf.jobs.lint!.steps.map((s) => s.run).filter(Boolean)).toEqual(['npx -y "__DOCSWORTH_PACKAGE__" lint .']);
+    expect(wf.permissions).toEqual({ contents: "read" });
   });
 
   it("pins every action by commit SHA, in customers' workflow and in each of this repo's workflows", () => {

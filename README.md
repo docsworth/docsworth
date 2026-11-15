@@ -45,7 +45,7 @@ docsworth lint .                   # 3 pages, 0 errors, 0 warnings
 ```
 
 `init` reads your GitHub org from the repo's remote; in a repo without one yet, add
-`--org <your-org>`. Add `--ci` for a workflow that lints and compiles on every PR.
+`--org <your-org>`. Add `--ci` for a workflow that lints every PR and every push to `main`.
 
 Install the Claude Code plugin from this repo's marketplace:
 
@@ -117,17 +117,18 @@ reads `[restricted page]` too: a route can't be told from a hidden page's.
 | `docsworth adopt [dir] [--team t]` | Existing pages get the frontmatter they lack, as drafts, and route links become `.md` links; lists what it can't settle. Working tree only; `--dry-run`. |
 | `docsworth verify <paths…>` | The draft or canonical pages under the paths become canonical, verified today. Working tree only; `--dry-run`. |
 | `docsworth stale [dir]` | Pages past their review SLA or without a team owner. |
-| `docsworth coverage [dir] [--html f]` | Percentage team-owned and percentage verified within SLA, by team; optional static dashboard. |
-| `docsworth digest [dir] [--send]` | Weekly per-team digest: due, overdue, most read by agents. Prints unless `--send`. |
+| `docsworth coverage [dir] [--html f]` | Percentage team-owned and percentage verified within SLA, by team; optional static dashboard (`--html`, pro). |
+| `docsworth digest [dir] [--send]` | **Pro.** Weekly per-team digest: due, overdue, most read by agents. Prints unless `--send`. |
 | `docsworth mcp [dir]` | The MCP server (stdio): `search`, `read`, `list`, `stale`, `propose_edit`, `verify`, `draft_page`. Without `dir`, it serves `DOCSWORTH_KNOWLEDGE_DIR`, else the current directory. |
 | `docsworth serve [dir]` | The web app at `127.0.0.1:4747` (overview, search, pages, teams, a link graph, capture), and the same server over HTTP for it and the browser extension, behind a token kept in your state directory (`--print-token`, `--rotate-token`, `--allow-extension <id>`). |
-| `docsworth compile [dir] [--check]` | Canonical runbooks → `skills/<id>/SKILL.md`; `--check` exits 1 on drift. |
-| `docsworth mirror [dir]` | Read-only Confluence and Notion mirror into `.knowledge/mirror`, scored. |
-| `docsworth promote <mirror-id> --owner-team t` | Draft PR copying a mirrored page into `knowledge/`. |
-| `docsworth audit [dir] [--bench d]` | Audit report: coverage, stale and overlapping pages, DIY accuracy score. |
-| `docsworth bench run [dir]` | Citation benchmark: Claude on the raw wiki vs. the ungated layer vs. the gated layer. |
+| `docsworth compile [dir] [--check]` | **Pro.** Canonical runbooks → `skills/<id>/SKILL.md`; `--check` exits 1 on drift. |
+| `docsworth mirror [dir]` | **Pro.** Read-only Confluence and Notion mirror into `.knowledge/mirror`, scored. |
+| `docsworth promote <mirror-id> --owner-team t` | **Pro.** Draft PR copying a mirrored page into `knowledge/`. |
+| `docsworth audit [dir] [--bench d]` | **Pro.** Audit report: coverage, stale and overlapping pages, DIY accuracy score. |
+| `docsworth bench run [dir]` | **Pro.** Citation benchmark: Claude on the raw wiki vs. the ungated layer vs. the gated layer. |
 
-`--as-of YYYY-MM-DD` evaluates SLAs on a fixed date, for reproducible reports.
+Commands marked pro are Docsworth pro's (`@docsworth-pro/pro`); without it installed, each exits 2 and
+says so. `--as-of YYYY-MM-DD` evaluates SLAs on a fixed date, for reproducible reports.
 
 ## How it works
 
@@ -229,8 +230,8 @@ See [AGENTS.md](AGENTS.md), and [docs/releasing.md](docs/releasing.md) for relea
 
 ## Status
 
-v0.3. What's in it, and what hasn't been verified against the real thing yet, is in
-[the release notes](docs/release-notes/v0.3.0.md).
+v0.3. What's in it, and what hasn't been verified against the real thing yet, is in the
+release notes for [0.3.0](docs/release-notes/v0.3.0.md) and [0.3.1](docs/release-notes/v0.3.1.md).
 
 ## License
 

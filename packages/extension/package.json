@@ -1,6 +1,6 @@
 {
   "name": "@docsworth/extension",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "The Docsworth browser extension (Chromium, Manifest V3): a side panel over `docsworth serve`, saving a page or a selection (the context menu and the panel) and a Gmail button. Built into packages/extension/dist and loaded unpacked; never published.",
   "type": "module",

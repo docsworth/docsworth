@@ -1,6 +1,6 @@
 /** Format version of the knowledge repo contract in docs/format-spec.md. */
 export const FORMAT_VERSION = 1;
-export const PACKAGE_VERSION = "0.3.0";
+export const PACKAGE_VERSION = "0.3.1";
 
 /**
  * The npm package Docsworth is published as, with its version range: what `docsworth init
