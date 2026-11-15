@@ -60,7 +60,7 @@ describe("only our package is ever fetched", () => {
     const root = fresh();
     initRepo(root, { org: "acme", team: "platform", ci: true, now: NOW });
     const wf = readFileSync(join(root, ".github/workflows/knowledge.yml"), "utf8");
-    expect(wf.match(/npx -y \S+/g)).toEqual(Array(4).fill('npx -y "@docsworth/cli@^0.3"'));
+    expect(wf.match(/npx -y \S+/g)).toEqual(Array(1).fill('npx -y "@docsworth/cli@^0.3"'));
   });
 
   it("docsworth init --ci refuses a package we don't own, before writing anything", () => {
@@ -75,7 +75,7 @@ describe("only our package is ever fetched", () => {
     const root = fresh();
     initRepo(root, { org: "acme", team: "platform", ci: true, package: "@example/docsworth@^0.2", now: NOW });
     const wf = readFileSync(join(root, ".github/workflows/knowledge.yml"), "utf8");
-    expect(wf.match(/npx -y \S+/g)).toEqual(Array(4).fill('npx -y "@example/docsworth@^0.2"'));
+    expect(wf.match(/npx -y \S+/g)).toEqual(Array(1).fill('npx -y "@example/docsworth@^0.2"'));
     expect(wf).not.toContain("__DOCSWORTH_PACKAGE__");
   });
 

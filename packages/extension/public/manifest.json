@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Docsworth",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Search and read your team's Docsworth pages, and save a page or a selection to them as a draft PR, through docsworth serve on this machine.",
   "minimum_chrome_version": "130",
   "permissions": ["sidePanel", "storage", "contextMenus", "alarms", "activeTab", "scripting"],

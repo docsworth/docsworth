@@ -60,8 +60,9 @@ then `gh auth token`.
   review on the default branch. That's what makes "a human from the owning team approves
   every change" true.
 - **CI:** add `templates/github/knowledge.yml` as `.github/workflows/knowledge.yml`
-  (`docsworth init --ci`). It lints every PR and recompiles skills on merge.
-- **Weekly digest:** schedule `docsworth digest --send`, with `SLACK_WEBHOOK_URL` and optional
+  (`docsworth init --ci`). It lints every PR and every push to the default branch. It runs the
+  published CLI, so not pro's commands: recompiling skills (`docsworth compile`) is pro's.
+- **Weekly digest (Docsworth pro):** schedule `docsworth digest --send`, with `SLACK_WEBHOOK_URL` and optional
   per-team webhooks, from CI or cron.
 
 ## 5. Check it landed

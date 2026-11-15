@@ -5,7 +5,9 @@ import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { HOST_API } from "../src/core/host.js";
+import { PUBLISHED_PACKAGE } from "../src/core/version.js";
 
 // The CLI as a user gets it: built, packed by npm, and installed from that tarball into an
 // empty project. Docsworth pro is a separate package under its own licence, so it's not
@@ -143,6 +145,26 @@ describe("the packed CLI, installed from its tarball", () => {
     for (const [feature, args] of commands) {
       const r = docsworth(args);
       expect({ args: args.join(" "), status: r.status, stderr: r.stderr.trim() }).toEqual({ args: args.join(" "), status: 2, stderr: notInstalled(feature) });
+    }
+  });
+
+  it("passes every step of the workflow `init --ci` writes, run as CI runs it, without pro", () => {
+    // A knowledge repo's CI fetches this package through npx, so pro is never there: a step
+    // that needs pro fails every push and every PR. Found by running the workflow in a new
+    // GitHub repo, where `compile` exited 2 on both (2026-11-15).
+    const repo = join(work, "kb-ci");
+    execFileSync("git", ["init", "-q", repo]);
+    expect(docsworth(["init", repo, "--org", "acme", "--team", "platform", "--ci"]).status).toBe(0);
+    const wf = parseYaml(readFileSync(join(repo, ".github/workflows/knowledge.yml"), "utf8")) as { jobs: Record<string, { steps: { run?: string }[] }> };
+    const runs = Object.values(wf.jobs).flatMap((j) => j.steps.flatMap((st) => (st.run ? [st.run] : [])));
+    expect(runs.length).toBeGreaterThan(0);
+    const npx = `npx -y "${PUBLISHED_PACKAGE}" `;
+    for (const run of runs) {
+      // Each step is one `docsworth` command, run in the checkout; any other step would need
+      // its own stand-in here before it could ship.
+      expect({ run, docsworthStep: run.startsWith(npx) && !run.includes("\n") }).toEqual({ run, docsworthStep: true });
+      const r = spawnSync(join(bin(), "docsworth"), run.slice(npx.length).split(" "), { cwd: repo, encoding: "utf8", env: ENV });
+      expect({ run, status: r.status, stderr: r.stderr.trim() }).toEqual({ run, status: 0, stderr: "" });
     }
   });
 
