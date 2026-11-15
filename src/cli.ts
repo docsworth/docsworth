@@ -24,7 +24,7 @@ import { KnowledgeService } from "./core/service.js";
 import { listStale } from "./core/stale.js";
 import { printable, printableJson } from "./core/printable.js";
 import { verifyPages } from "./core/verify-pages.js";
-import { PACKAGE_VERSION } from "./core/version.js";
+import { PACKAGE_NAME, PACKAGE_VERSION } from "./core/version.js";
 import { existsSync, readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 // Pro loads lazily through `pro()` below; the CLI knows it only by core's contract.
@@ -83,8 +83,25 @@ function isMissingPro(err: unknown): boolean {
 
 /** "Pro isn't installed." Only pro() throws it; it prints like any ConfigError. */
 class ProMissing extends ConfigError {}
-/** Pro is installed but can't be used: it doesn't load, or it was built for another CLI. */
-class ProUnusable extends ConfigError {}
+/** Pro is installed but can't be used (`why`): it doesn't load, or it was built for another CLI. */
+class ProUnusable extends ConfigError {
+  constructor(
+    feature: string,
+    readonly why: string,
+  ) {
+    super(`${feature} needs Docsworth pro, which is installed but can't be used: ${why}`);
+  }
+}
+
+/**
+ * True when pro couldn't find this CLI by its package name, which pro imports the facade by.
+ * That's the setup, not a fault inside pro: the two aren't installed side by side, as in
+ * Docsworth's own repository, where the CLI is the root package and nothing installs it
+ * under its name.
+ */
+function cantFindCli(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException)?.code === "ERR_MODULE_NOT_FOUND" && (err as Error).message.startsWith(`Cannot find package '${PACKAGE_NAME}' `);
+}
 
 /**
  * Whether pro can be used, decided once: missing, unusable (why), or ok. Pro declares the
@@ -102,18 +119,42 @@ const proStatus = () =>
 /**
  * Pro is a separate package, so the core CLI runs without it and a pro command says what's
  * missing. Once pro is known to be usable, a failure loading a module of it is pro's own: a
- * file missing inside it is a real error, reported as it is.
+ * file missing inside it is a real error, reported as it is. The one exception is pro not
+ * finding this CLI by name (cantFindCli), said in one line with what to do.
  */
 async function pro<T>(feature: string, load: () => Promise<T>): Promise<T> {
   const state = await proStatus();
   if ("missing" in state) throw new ProMissing(`${feature} is part of Docsworth pro, which isn't installed`);
-  if ("unusable" in state) throw new ProUnusable(`${feature} needs Docsworth pro, which is installed but can't be used: ${state.unusable}`);
-  return load();
+  if ("unusable" in state) throw new ProUnusable(feature, state.unusable);
+  return load().catch((err: unknown) => {
+    if (!cantFindCli(err)) throw err;
+    throw new ProUnusable(feature, `it can't find ${PACKAGE_NAME}, the CLI it runs in. Install the two side by side; in Docsworth's own repository, run the CLI as \`npm run docsworth\``);
+  });
 }
 
 /** Pro's commands (src/core/host.ts, ProCommands), once pro is known to be usable. */
 const proCommands = (feature: string): Promise<ProCommands> =>
   pro(feature, async () => ((await import(`${PRO_PACKAGE}/commands`)) as { commands: ProCommands }).commands);
+
+/** The pro commands a person runs, as the CLI names them, for the web app's settings. */
+const PRO_COMMANDS = ["digest", "coverage --html", "compile", "audit", "access-review", "usage-report", "mirror", "promote", "bench"];
+
+/**
+ * What `serve` tells the web app pro adds: its commands when pro loads, none when it isn't
+ * installed. The server doesn't need pro, so one that's installed but can't be used is named
+ * on stderr, once, and the server runs without it.
+ */
+async function proForServe(): Promise<string[]> {
+  try {
+    await proCommands("serve");
+    return PRO_COMMANDS;
+  } catch (err) {
+    if (err instanceof ProMissing) return [];
+    const why = err instanceof ProUnusable ? err.why : `it doesn't load: ${(err as Error).message}`;
+    process.stderr.write(`docsworth: Docsworth pro is installed but can't be used, so the web app shows it as not installed: ${printable(why)}\n`);
+    return [];
+  }
+}
 
 /**
  * Without pro, an audit_http block can't be fully validated, so only the plainly optional
@@ -364,6 +405,7 @@ program
       token,
       extensions: new Set(opts.allowExtension),
       webRoot: existsSync(join(web, "index.html")) ? web : null,
+      proCommands: await proForServe(),
     }).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") throw new ConfigError(`port ${opts.port} is in use; pick another with --port`);
       throw err;

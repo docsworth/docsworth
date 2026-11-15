@@ -1,13 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { HOST_API } from "../src/core/host.js";
-import { PUBLISHED_PACKAGE } from "../src/core/version.js";
+import { PACKAGE_NAME, PUBLISHED_PACKAGE } from "../src/core/version.js";
 
 // The CLI as a user gets it: built, packed by npm, and installed from that tarball into an
 // empty project. Docsworth pro is a separate package under its own licence, so it's not
@@ -108,6 +109,40 @@ describe("the packed CLI, installed from its tarball", () => {
     } finally {
       child.kill("SIGTERM");
     }
+  }, 60_000);
+
+  /** `serve` on the test repo: what `ui_capabilities` tells the web app about pro, and serve's stderr. */
+  async function servedPro(): Promise<{ pro: string[]; panels: string[]; stderr: string }> {
+    const { spawn } = await import("node:child_process");
+    const child = spawn(join(bin(), "docsworth"), ["serve", kb, "--port", "0"], { env: ENV, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    try {
+      const url = await new Promise<URL>((done, fail) => {
+        child.stderr!.on("data", (d: Buffer) => {
+          stderr += d;
+          const m = / at (http:\/\/127\.0\.0\.1:\d+\/#t=[A-Za-z0-9_-]{43})\n/.exec(stderr);
+          if (m) done(new URL(m[1]!));
+        });
+        child.on("exit", (code) => fail(new Error(`serve exited ${code}: ${stderr}`)));
+      });
+      const client = new Client({ name: "docsworth-web", version: "0.0.0" });
+      await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", url), { requestInit: { headers: { authorization: `Bearer ${url.hash.slice(3)}` } } }));
+      try {
+        const r = await client.callTool({ name: "ui_capabilities", arguments: {} });
+        const caps = r.structuredContent as { pro: string[]; pro_commands: string[] };
+        return { pro: caps.pro_commands, panels: caps.pro, stderr };
+      } finally {
+        await client.close();
+      }
+    } finally {
+      child.kill("SIGTERM");
+    }
+  }
+
+  it("serve tells the web app pro isn't installed, and says nothing about it", async () => {
+    const r = await servedPro();
+    expect(r.pro).toEqual([]);
+    expect(r.stderr).not.toMatch(/pro/i);
   }, 60_000);
 
   it("runs as every command package.json names, through the link npm installs", () => {
@@ -229,11 +264,11 @@ describe("the packed CLI, installed from its tarball", () => {
 
   describe("with a stand-in pro installed where the real one goes", () => {
     const proDir = () => join(project, "node_modules/@docsworth-pro/pro");
-    function standIn(files: Record<string, string>): void {
+    function standIn(files: Record<string, string>, dir = proDir()): void {
       const manifest = { name: "@docsworth-pro/pro", version: "0.0.0", type: "module", exports: { "./host-api": "./host-api.js", "./commands": "./commands.js", "./package.json": "./package.json" } };
       for (const [f, content] of Object.entries({ "package.json": JSON.stringify(manifest), ...files })) {
-        mkdirSync(dirname(join(proDir(), f)), { recursive: true });
-        writeFileSync(join(proDir(), f), content);
+        mkdirSync(dirname(join(dir, f)), { recursive: true });
+        writeFileSync(join(dir, f), content);
       }
     }
     afterEach(() => rmSync(join(project, "node_modules/@docsworth-pro"), { recursive: true, force: true }));
@@ -263,6 +298,65 @@ describe("the packed CLI, installed from its tarball", () => {
       expect(r.stderr).toContain("ERR_MODULE_NOT_FOUND");
       expect(r.stderr).toContain("mirror/http.js");
       expect(r.stderr).not.toContain("isn't installed");
+    });
+
+    it("serve tells the web app pro's commands when pro loads, each one a command of the CLI", async () => {
+      standIn({ "host-api.js": `export const PRO_HOST_API = ${HOST_API};\n`, "commands.js": "export const commands = {};\n" });
+      const r = await servedPro();
+      expect(r.pro).toEqual(["digest", "coverage --html", "compile", "audit", "access-review", "usage-report", "mirror", "promote", "bench"]);
+      expect(r.panels).toEqual([]); // `pro` stays the panels pro supplies, and there are none yet
+      expect(r.stderr).not.toMatch(/pro/i);
+      const help = docsworth(["--help"]).stdout;
+      for (const name of r.pro) expect(help, name).toMatch(new RegExp(`^  ${name.split(" ")[0]} `, "m"));
+      expect(docsworth(["coverage", "--help"]).stdout).toContain("--html <file>");
+    }, 60_000);
+
+    it("a pro that's installed but can't be used: serve says why once, and runs without it", async () => {
+      const cases: Array<[Record<string, string>, string]> = [
+        [{ "host-api.js": "export const PRO_HOST_API = 999;\n", "commands.js": "export const commands = {};\n" }, `it was built for host API 999, and this CLI has ${HOST_API}; install versions that match`],
+        // A file missing inside pro fails a pro command outright (below); serve doesn't need pro.
+        [{ "host-api.js": `export const PRO_HOST_API = ${HOST_API};\n`, "commands.js": 'import "./mirror/http.js";\nexport const commands = {};\n' }, "it doesn't load: Cannot find module "],
+      ];
+      for (const [files, why] of cases) {
+        standIn(files);
+        const r = await servedPro();
+        expect(r.pro).toEqual([]);
+        const said = r.stderr.split("\n").filter((l) => /pro/i.test(l));
+        expect(said).toHaveLength(1);
+        expect(said[0]).toContain(`docsworth: Docsworth pro is installed but can't be used, so the web app shows it as not installed: ${why}`);
+        rmSync(join(project, "node_modules/@docsworth-pro"), { recursive: true, force: true });
+      }
+    }, 120_000);
+
+    it("a pro that can't find the CLI by name, as in Docsworth's own repository, is refused in one line", () => {
+      // Pro imports the CLI's facade by package name. In Docsworth's own repository the CLI is
+      // the root package, so pro is linked beside it but nothing installs the CLI under that
+      // name. The same layout: the installed CLI copied out as a root package, its
+      // dependencies beside it, and pro, but no node_modules/@docsworth/cli.
+      const usesFacade = { "host-api.js": `export const PRO_HOST_API = ${HOST_API};\n`, "commands.js": 'import { HOST_API } from "@docsworth/cli/host";\nexport const commands = { digest: async () => console.log(`stand-in digest, host API ${HOST_API}`) };\n' };
+      // Control: installed beside the CLI, as a user installs them, the facade resolves.
+      standIn(usesFacade);
+      const beside = docsworth(["digest", kb]);
+      expect({ status: beside.status, stdout: beside.stdout.trim() }).toEqual({ status: 0, stdout: `stand-in digest, host API ${HOST_API}` });
+
+      const root = mkdtempSync(join(work, "root-cli-"));
+      try {
+        const cli = join(project, "node_modules/@docsworth/cli");
+        cpSync(join(cli, "dist"), join(root, "dist"), { recursive: true });
+        cpSync(join(cli, "package.json"), join(root, "package.json"));
+        mkdirSync(join(root, "node_modules"));
+        for (const dep of readdirSync(join(project, "node_modules"))) {
+          if (![".bin", "@docsworth", "@docsworth-pro"].includes(dep)) symlinkSync(join(project, "node_modules", dep), join(root, "node_modules", dep));
+        }
+        standIn(usesFacade, join(root, "node_modules/@docsworth-pro/pro"));
+        const r = spawnSync(process.execPath, [join(root, "dist/cli.js"), "digest", kb], { encoding: "utf8", env: ENV });
+        expect({ status: r.status, stderr: r.stderr.trim() }).toEqual({
+          status: 2,
+          stderr: `docsworth: digest needs Docsworth pro, which is installed but can't be used: it can't find ${PACKAGE_NAME}, the CLI it runs in. Install the two side by side; in Docsworth's own repository, run the CLI as \`npm run docsworth\``,
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
 
     it("an installed pro missing its own host API is broken, not missing", () => {

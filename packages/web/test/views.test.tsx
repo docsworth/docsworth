@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { DocsworthClient } from "@docsworth/ui";
+import { type Capabilities, DocsworthClient } from "@docsworth/ui";
 import { render } from "preact";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadRepo } from "../../../src/core/repo.js";
@@ -75,7 +75,12 @@ describe("web app views against a real serve (R13)", () => {
     expect(root.querySelector(".dw-tile b")?.textContent).toBe("21"); // 24 pages, 3 of them team-only
     expect(root.textContent).toContain("Joining on-call");
     expect(root.textContent).toContain("Scale the Kubernetes cluster");
-    expect(root.textContent).toContain("part of Docsworth pro");
+    // The pro note shows exactly when this server has no pro. From source, pro loads once it's
+    // built, so which it is depends on the checkout; both sides are pinned with a stub below.
+    const caps = new DocsworthClient({ url: origin, token: TOKEN });
+    const { pro_commands: pro = [] } = await caps.call<Capabilities>("ui_capabilities");
+    await caps.close();
+    expect(root.textContent?.includes("Docsworth pro adds"), JSON.stringify(pro)).toBe(pro.length === 0);
     expect([...root.querySelectorAll(".dw-table th[scope=row]")].map((th) => th.textContent)).toEqual(expect.arrayContaining(["payments", "platform", "devex"]));
     assertNoHiddenPage(root);
   });
@@ -236,6 +241,37 @@ describe("web app views against a real serve (R13)", () => {
       expect(note ?? null).toBe(says);
       render(null, container);
       container.remove();
+    }
+    container = document.createElement("div"); // for afterEach
+    document.body.appendChild(container);
+  });
+
+  it("overview and settings: what pro adds, only without pro; with it, pro's commands", async () => {
+    const overview = { as_of: "2026-11-12", totals: { pages: 21, citable: 16, overdue: 0, due_soon: 0, draft: 0, deprecated: 0 }, teams: [], due_soon: [], stale: [] };
+    const note = "Docsworth pro adds each team's review digest, an ownership dashboard, admin reports (audit, access review, usage), runbooks compiled into agent skills, and a read-only Confluence and Notion mirror.";
+    for (const [pro, shown, row] of [
+      [[], note, "not installed"],
+      [["digest", "coverage --html", "compile"], null, "installed: digest, coverage --html, compile"],
+    ] as const) {
+      const stub = {
+        call: async (tool: string) => (tool === "ui_capabilities" ? { mode: "local", login: null, org: "acme", repo: null, writes: false, write_tools: [], teams: [], pro: [], pro_commands: pro } : overview),
+      } as unknown as DocsworthClient;
+      for (const path of ["/", "/settings"]) {
+        (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM.setURL(`http://127.0.0.1:1${path}`);
+        container = document.createElement("div");
+        document.body.appendChild(container);
+        render(<App client={stub} />, container);
+        if (path === "/") {
+          await vi.waitFor(() => expect(container.textContent).toContain("Knowledge overview"));
+          expect([...container.querySelectorAll(".dw-note")].map((n) => n.textContent).find((t) => /Docsworth pro/.test(t ?? "")) ?? null, JSON.stringify(pro)).toBe(shown);
+        } else {
+          await vi.waitFor(() => expect(container.textContent).toContain("Settings"));
+          const th = [...container.querySelectorAll(".dw-table th[scope=row]")].find((t) => t.textContent === "Docsworth pro");
+          expect(th?.nextElementSibling?.textContent, JSON.stringify(pro)).toBe(row);
+        }
+        render(null, container);
+        container.remove();
+      }
     }
     container = document.createElement("div"); // for afterEach
     document.body.appendChild(container);

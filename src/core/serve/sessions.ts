@@ -26,6 +26,8 @@ export interface SessionOptions {
   maxSessions?: number;
   idleMs?: number;
   log?: (msg: string) => void;
+  /** Docsworth pro's commands when pro is installed and loads, for `ui_capabilities` (none otherwise). */
+  proCommands?: readonly string[];
 }
 
 interface Session {
@@ -196,7 +198,7 @@ export class SessionTable {
       if (http.sessionId) this.sessions.delete(http.sessionId);
       service.close();
     };
-    const server = createMcpServer(service, { who: o.who, whoami: () => o.identity.get(), surface: "http" });
+    const server = createMcpServer(service, { who: o.who, whoami: () => o.identity.get(), surface: "http", proCommands: o.proCommands });
     const session: Session = { http, server, service, lastUsed: Date.now(), active: 1 };
     await server.connect(transport);
     return session;

@@ -44,7 +44,15 @@ export const POLICY_RESYNC_MS = 15_000;
 
 export function createMcpServer(
   service: KnowledgeService,
-  opts: { who?: Identity; whoami?: () => Promise<Identity>; resyncMs?: number; /** `http`: also the web app's tools (`docsworth serve`). */ surface?: "stdio" | "http" } = {},
+  opts: {
+    who?: Identity;
+    whoami?: () => Promise<Identity>;
+    resyncMs?: number;
+    /** `http`: also the web app's tools (`docsworth serve`). */
+    surface?: "stdio" | "http";
+    /** Docsworth pro's commands when pro loads, for `ui_capabilities` (none otherwise). */
+    proCommands?: readonly string[];
+  } = {},
 ): McpServer {
   const server = new McpServer({ name: "docsworth", version: PACKAGE_VERSION }, { instructions: INSTRUCTIONS });
   const writeMeta = service.policy().require_human_approval ? { _meta: { [REQUIRES_USER_INTERACTION]: true } } : {};
@@ -207,7 +215,7 @@ export function createMcpServer(
     registered.set("ui_capabilities", server.registerTool(
       "ui_capabilities",
       { title: "Capabilities", description: "For the Docsworth web app: who is served, in which mode, and whether writes would work.", inputSchema: {}, annotations: view },
-      () => after(run(() => service.uiCapabilities())),
+      () => after(run(() => service.uiCapabilities({ proCommands: opts.proCommands }))),
     ));
     registered.set("ui_overview", server.registerTool(
       "ui_overview",
