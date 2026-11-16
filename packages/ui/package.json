@@ -1,6 +1,6 @@
 {
   "name": "@docsworth/ui",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Docsworth's shared UI: the MCP client, the theme, safe markdown and the Preact components that the web app and the browser extension both use. Bundled into each; never published.",
   "type": "module",

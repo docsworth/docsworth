@@ -8,7 +8,8 @@ to a GitHub release.
 
 1. Bump the version in `package.json` (and the lockfile), `PACKAGE_VERSION` in
    `src/core/version.ts`, `plugin/.claude-plugin/plugin.json` and
-   `.claude-plugin/marketplace.json`. If the version leaves the range in
+   `.claude-plugin/marketplace.json`, and in `server.json` its own `version` and its npm
+   package's. If the version leaves the range in
    `PUBLISHED_PACKAGE` (`src/core/version.ts` and `plugin/bin/docsworth-mcp.mjs`, which a
    test keeps equal), move the range too: the plugin and `docsworth init --ci` fetch it.
 2. Write the release notes, `docs/release-notes/v<version>.md`.
@@ -35,6 +36,22 @@ to a GitHub release.
 - **Both can run again** after a partial release. A version already on npm is left alone
   if it's this very tarball, and refused otherwise. An existing GitHub release has its
   assets replaced.
+
+## The MCP registry listing
+
+`server.json` lists the MCP server on the
+[MCP registry](https://registry.modelcontextprotocol.io) as `io.github.docsworth/docsworth`,
+run with `npx` from this npm package. The registry accepts a listing only when the npm
+version it names has the same name as `mcpName` in its `package.json`, so the guard holds
+`server.json`'s name and versions to `package.json`'s, in the repository and in the packed
+tarball. 0.3.1 and earlier have no `mcpName`: the first listing waits for the release after.
+
+Publishing it is separate from the npm release, after it, with the registry's
+`mcp-publisher` (`validate`, then `publish`). Only an owner of the `docsworth` GitHub org
+may publish under `io.github.docsworth/`, and the registry's device-flow GitHub login can't
+publish under an organization: sign in with a classic token with `read:org`, or from GitHub
+Actions with OIDC (the registry's
+[authentication docs](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/authentication.mdx)).
 
 ## Repository setup, once
 
