@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,7 +12,9 @@ import { inRange, type ReleaseState, releaseProblems, tarballProblems } from "..
 // file for a fetch of a name we don't own (or ours, before it's published), and these are
 // the guard's refusal cases, not instructions.
 const spec = (name: string, range: string) => [name, range].join("@");
-const ok: ReleaseState = { tag: "v0.2.0", name: "@docsworth/cli", version: "0.2.0", codeVersion: "0.2.0", pluginVersion: "0.2.0", published: spec("@docsworth/cli", "^0.2"), notes: true };
+const MCP = "io.github.docsworth/docsworth";
+const listing = (version = "0.2.0", identifier = "@docsworth/cli", name = MCP) => ({ name, version, packages: [{ registryType: "npm", identifier, version }] });
+const ok: ReleaseState = { tag: "v0.2.0", name: "@docsworth/cli", version: "0.2.0", codeVersion: "0.2.0", pluginVersion: "0.2.0", published: spec("@docsworth/cli", "^0.2"), notes: true, mcpName: MCP, server: listing() };
 
 describe("release guard", () => {
   it("lets a consistent release through", () => {
@@ -31,17 +33,45 @@ describe("release guard", () => {
     ["a published package that names something else", { published: spec("@docsworth/other", "^0.2") }, /names @docsworth\/other, but package.json is @docsworth\/cli/],
     ["a version outside the published range", { published: spec("@docsworth/cli", "^0.3") }, /isn't in PUBLISHED_PACKAGE's range \^0.3/],
     ["no release notes", { notes: false }, /no release notes at docs\/release-notes\/v0.2.0.md/],
-    ["a prerelease", { tag: "v0.2.0-beta.1", version: "0.2.0-beta.1", codeVersion: "0.2.0-beta.1", pluginVersion: "0.2.0-beta.1" }, /isn't a plain major.minor.patch version/],
+    ["a prerelease", { tag: "v0.2.0-beta.1", version: "0.2.0-beta.1", codeVersion: "0.2.0-beta.1", pluginVersion: "0.2.0-beta.1", server: listing("0.2.0-beta.1") }, /isn't a plain major.minor.patch version/],
+    // The MCP registry listing (server.json): the registry checks that the npm package's
+    // mcpName is the listing's name, and installs the version the listing names.
+    ["no MCP registry listing", { server: null }, /^there's no server.json, the MCP registry listing$/m],
+    ["no mcpName in package.json", { mcpName: undefined }, /^package.json has no mcpName; the MCP registry needs it to be server.json's name, io.github.docsworth\/docsworth$/m],
+    ["a listing named apart from mcpName", { server: listing("0.2.0", "@docsworth/cli", "io.github.docsworth/other") }, /^server.json names io.github.docsworth\/other, but package.json's mcpName is io.github.docsworth\/docsworth$/m],
+    ["a listing behind the package", { server: { ...listing(), version: "0.1.0" } }, /^server.json's version \(0.1.0\) isn't package.json's 0.2.0$/m],
+    ["a listing whose package is behind", { server: { ...listing(), packages: [{ registryType: "npm", identifier: "@docsworth/cli", version: "0.1.0" }] } }, /^server.json installs @docsworth\/cli 0.1.0, not package.json's 0.2.0$/m],
+    ["a listing of another package", { server: listing("0.2.0", "@acme/other") }, /^server.json lists no npm package @docsworth\/cli$/m],
   ] as const)("refuses %s", (_what, change, message) => {
     expect(releaseProblems({ ...ok, ...change }).join("\n")).toMatch(message);
   });
 
   it("checks the packed tarball's own manifest", () => {
-    expect(tarballProblems({ name: "@docsworth/cli", version: "0.2.0" }, "@docsworth/cli", "0.2.0")).toEqual([]);
-    expect(tarballProblems({ name: "agent-kb", version: "0.2.1" }, "@docsworth/cli", "0.2.0")).toEqual([
+    expect(tarballProblems({ name: "@docsworth/cli", version: "0.2.0", mcpName: MCP }, "@docsworth/cli", "0.2.0", MCP)).toEqual([]);
+    expect(tarballProblems({ name: "agent-kb", version: "0.2.1" }, "@docsworth/cli", "0.2.0", MCP)).toEqual([
       "the tarball's package.json names agent-kb, not @docsworth/cli",
       "the tarball's version is 0.2.1, not 0.2.0",
+      "the tarball's package.json has mcpName undefined, not io.github.docsworth/docsworth, so the MCP registry would refuse the listing",
     ]);
+  });
+
+  // The listing as this repository has it: what the registry's schema limits, and every
+  // variable it declares is one the server reads.
+  it("the repository's own listing agrees with package.json and with the code", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { name: string; version: string; mcpName?: string };
+    const server = JSON.parse(readFileSync("server.json", "utf8")) as {
+      name: string;
+      description: string;
+      version: string;
+      packages: { registryType: string; identifier: string; version: string; transport: { type: string }; packageArguments: { type: string; value: string }[]; environmentVariables: { name: string }[] }[];
+    };
+    expect(releaseProblems({ ...ok, tag: `v${pkg.version}`, name: pkg.name, version: pkg.version, codeVersion: pkg.version, pluginVersion: pkg.version, published: spec(pkg.name, `^${pkg.version.split(".").slice(0, 2).join(".")}`), mcpName: pkg.mcpName, server })).toEqual([]);
+    expect(server.name).toMatch(/^io\.github\.docsworth\/[a-zA-Z0-9._-]+$/);
+    expect(server.description.length).toBeLessThanOrEqual(100);
+    const [npm] = server.packages;
+    expect({ transport: npm!.transport, args: npm!.packageArguments }).toEqual({ transport: { type: "stdio" }, args: [{ type: "positional", value: "mcp" }] });
+    const source = ["src/cli.ts", "src/core/identity.ts"].filter(existsSync).map((f) => readFileSync(f, "utf8")).join("\n");
+    for (const { name } of npm!.environmentVariables) expect(source, name).toMatch(new RegExp(`env\\.${name}\\b`));
   });
 
   it.each([

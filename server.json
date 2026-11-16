@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.docsworth/docsworth",
+  "title": "Docsworth",
+  "description": "Team-owned docs for coding agents: review SLAs, a citation gate, and PR-only writes.",
+  "repository": {
+    "url": "https://github.com/docsworth/docsworth",
+    "source": "github"
+  },
+  "version": "0.3.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@docsworth/cli",
+      "version": "0.3.2",
+      "runtimeHint": "npx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [{ "type": "positional", "value": "mcp" }],
+      "environmentVariables": [
+        {
+          "name": "DOCSWORTH_KNOWLEDGE_DIR",
+          "description": "A local clone of the knowledge repository to serve",
+          "format": "filepath",
+          "isRequired": true
+        },
+        {
+          "name": "GITHUB_TOKEN",
+          "description": "Your GitHub token, for your identity and team access when the repository names one in github.repo (otherwise GH_TOKEN, then `gh auth token`)",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
