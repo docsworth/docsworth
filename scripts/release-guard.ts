@@ -1,6 +1,6 @@
 // Refuses a release tag that can't be published as ours. The release workflow runs it
 // before anything else; a person can run it before tagging:
-//   npx tsx scripts/release-guard.ts v0.3.2 [--tarball <package.tgz>]
+//   npx tsx scripts/release-guard.ts v0.3.3 [--tarball <package.tgz>]
 // It prints every problem and exits 1 if there is one.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";

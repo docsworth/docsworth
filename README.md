@@ -94,14 +94,35 @@ A page or link it can't settle stays as it is, listed, and lint fails it until i
 by hand: a category index like `guides/index.md`, two pages with one file name, a link to
 nothing. `--dry-run` reports and writes nothing.
 
-Adopted pages are drafts, so agents cite none of them yet. Once a team has read its pages:
+**Pages copied in from other repos.** A page's date (`last_verified`) is when its content
+last changed: its last commit here, else today. A file copied in from elsewhere has no
+history here. So, before changing the copies in any way, name the repos they came from:
 
 ```bash
+docsworth adopt --team docs --dates-from ~/src/api --dates-from ~/src/web
+```
+
+- **How a page is dated.** It gets the newest commit, in those repos' history, that
+  introduced its exact content, whatever the file is called there. Failing that, it gets
+  the newest commit here with that content. Failing both, today, and adopt lists it.
+- **What adopt reports:** how many pages each repo dated.
+- **What won't match:** a copy edited before adopt ran, content behind a git filter other
+  than line endings (Git LFS, say), and content that appeared only in a merge's conflict
+  resolution.
+- **Moves count.** A file moved or renamed there without edits counts as changed when it
+  moved.
+
+Adopted pages are drafts, so agents cite none of them yet. `docsworth drafts` is the queue,
+newest content first: a page changed last week is likelier to be right than one untouched
+for a year. Once a team has read its pages:
+
+```bash
+docsworth drafts                   # what to read and verify, newest first
 docsworth verify knowledge/guides  # canonical, verified today
 ```
 
 Both commands only change files. Commit them and open a pull request, which CODEOWNERS
-sends to the owning team.
+sends to the owning team. In a repository with no remote, both say to commit instead.
 
 If the site stays up, set `site_url` (`https://docs.example.com/docs/`) in the config.
 Then a link to a page someone can't see reads `[restricted page]` by its full URL on the
@@ -114,8 +135,9 @@ reads `[restricted page]` too: a route can't be told from a hidden page's.
 | --- | --- |
 | `docsworth init [dir]` | Scaffold config, CODEOWNERS, `knowledge/index.md`, a glossary and a writing guide. Never overwrites. |
 | `docsworth lint [dir]` | Frontmatter, CODEOWNERS ownership, links and duplicate ids. Exit 1 on errors; overdue pages only warn. |
-| `docsworth adopt [dir] [--team t]` | Existing pages get the frontmatter they lack, as drafts, and route links become `.md` links; lists what it can't settle. Working tree only; `--dry-run`. |
+| `docsworth adopt [dir] [--team t] [--dates-from repo…]` | Existing pages get the frontmatter they lack, as drafts, and route links become `.md` links; lists what it can't settle. `--dates-from` dates pages copied from other repos by their content's history there. Working tree only; `--dry-run`. |
 | `docsworth verify <paths…>` | The draft or canonical pages under the paths become canonical, verified today. Working tree only; `--dry-run`. |
+| `docsworth drafts [dir]` | The verify queue: draft pages, newest content first, with each one's owner and SLA state. |
 | `docsworth stale [dir]` | Pages past their review SLA or without a team owner. |
 | `docsworth coverage [dir] [--html f]` | Percentage team-owned and percentage verified within SLA, by team; optional static dashboard (`--html`, pro). |
 | `docsworth digest [dir] [--send]` | **Pro.** Weekly per-team digest: due, overdue, most read by agents. Prints unless `--send`. |
@@ -231,8 +253,8 @@ See [AGENTS.md](AGENTS.md), and [docs/releasing.md](docs/releasing.md) for relea
 ## Status
 
 v0.3. What's in it, and what hasn't been verified against the real thing yet, is in the
-release notes for [0.3.0](docs/release-notes/v0.3.0.md), [0.3.1](docs/release-notes/v0.3.1.md) and
-[0.3.2](docs/release-notes/v0.3.2.md).
+release notes for [0.3.0](docs/release-notes/v0.3.0.md), [0.3.1](docs/release-notes/v0.3.1.md),
+[0.3.2](docs/release-notes/v0.3.2.md) and [0.3.3](docs/release-notes/v0.3.3.md).
 
 ## License
 

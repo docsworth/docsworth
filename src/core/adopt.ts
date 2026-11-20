@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -9,6 +10,7 @@ import { CONFIG_PATH, type Config, ConfigSchema, loadConfig } from "./config.js"
 import { DURATION_RE, formatDate, utcToday } from "./duration.js";
 import { applyEdits, type Edit } from "./edits.js";
 import { UserError } from "./errors.js";
+import { gitAt } from "./git.js";
 import { frontmatterSpan, splitFrontmatter } from "./frontmatter.js";
 import { EXTERNAL, isAttachment, isCategoryIndex, type LinkSpan, linkFault, linkPath, linkSpans, pageLinks, readDestination, routePages, servedFrom, shownPath, siteRoute, unprefixed } from "./links.js";
 
@@ -30,6 +32,8 @@ export interface AdoptOptions {
   reviewEvery?: string;
   /** Report, and write nothing. */
   dryRun?: boolean;
+  /** Git repos the pages were copied from (`--dates-from`): a page adopt dates gets the newest commit there with its content. */
+  datesFrom?: string[];
 }
 
 export interface AdoptResult {
@@ -46,6 +50,10 @@ export interface AdoptResult {
   linksRewritten: number;
   /** Links lint fails that adopt couldn't rewrite, as written, and why. */
   linksLeft: { path: string; link: string; why: string }[];
+  /** With `--dates-from` only: how many adopted pages each repo dated (every source listed, then this repo's own history if it dated any). */
+  datedFrom?: { repo: string; pages: number }[];
+  /** With `--dates-from` only: adopted pages no commit had the content of, dated today. */
+  datedToday?: string[];
   /** Keys added to the config's `frontmatter.extra_fields`: the adopted pages' unknown keys (R3). */
   extraFields: string[];
 }
@@ -186,6 +194,69 @@ function lastCommitDates(repo: string, knowledgeRel: string): Map<string, string
     }
   }
   return out;
+}
+
+// `--dates-from`: copied pages dated by content, from other repos' history.
+
+/** Each markdown blob a repo's HEAD history introduced, by object id, to the greatest author date among the commits that did. */
+export interface ContentIndex {
+  repo: string;
+  format: "sha1" | "sha256";
+  dates: Map<string, string>;
+}
+
+/** A repo's top level, object format and content index; `null` when `dir` isn't in a git repo with commits. */
+function contentIndex(dir: string): ContentIndex | { refused: string } {
+  const top = gitAt(dir, ["rev-parse", "--show-toplevel"]);
+  if (top.status !== 0 || !top.stdout.trim()) return { refused: "isn't a git repository" };
+  const repo = realpathSync(top.stdout.trim());
+  if (gitAt(repo, ["rev-parse", "--verify", "--quiet", "HEAD"]).status !== 0) return { refused: "has no commits to date pages from" };
+  const format = gitAt(repo, ["rev-parse", "--show-object-format"]).stdout.trim();
+  if (format !== "sha1" && format !== "sha256") return { refused: `uses an object format adopt doesn't read (\`${format}\`)` };
+  // --root: log.showRoot=false would hide the first commit's files. --full-history: with a pathspec,
+  // git otherwise drops a merged branch's commits when the merge's tree equals one parent's.
+  const log = gitAt(repo, ["-c", "log.showSignature=false", "log", "-z", "--root", "--full-history", "--no-renames", "--raw", "--no-abbrev", "--format=dwdate:%as", "HEAD", "--", ":(glob)**/*.md", ":(glob)**/*.mdx"]);
+  if (log.error || log.status !== 0) return { refused: `has a history adopt couldn't read (${log.error?.message ?? log.stderr.trim().split("\n")[0]})` };
+  const dates = new Map<string, string>();
+  let date = "";
+  let pathNext = false;
+  for (const raw of log.stdout.split("\0")) {
+    const token = raw.replace(/^\n/, "");
+    if (pathNext) {
+      pathNext = false; // the path of the entry just read: not needed
+      continue;
+    }
+    if (token.startsWith("dwdate:")) {
+      date = token.slice("dwdate:".length);
+      continue;
+    }
+    const entry = /^:\d{6} \d{6} ([0-9a-f]+) ([0-9a-f]+) [A-Z]\d*$/.exec(token);
+    if (!entry) continue;
+    pathNext = true;
+    const [, before, blob] = entry as unknown as [string, string, string];
+    // The same blob on both sides is a mode change (chmod), not new content.
+    if (before === blob) continue;
+    // A maximum, not the first seen: rebases and backdated commits put author dates out of walk order.
+    if (!/^0+$/.test(blob) && date > (dates.get(blob) ?? "")) dates.set(blob, date);
+  }
+  return { repo, format, dates };
+}
+
+/** A file's git blob ids in `format`: of its bytes, and of them with CRLF as LF, as git stores text under `eol`/`autocrlf`. */
+function blobIds(bytes: Buffer, format: ContentIndex["format"]): string[] {
+  const id = (b: Buffer) => createHash(format).update(`blob ${b.length}\0`).update(b).digest("hex");
+  if (!bytes.includes(13)) return [id(bytes)];
+  return [id(bytes), id(Buffer.from(bytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1"))];
+}
+
+/** The newest date any of the page's blob ids has in `index`, or "". */
+function newestIn(index: ContentIndex, bytes: Buffer): string {
+  let best = "";
+  for (const id of blobIds(bytes, index.format)) {
+    const d = index.dates.get(id);
+    if (d && d > best) best = d;
+  }
+  return best;
 }
 
 /** A YAML scalar for one field. Title and id are quoted where Docusaurus's YAML 1.1 would read a date or a boolean. */
@@ -330,6 +401,22 @@ export function adoptRepo(root: string, opts: AdoptOptions): AdoptResult {
   if (!DURATION_RE.test(reviewEvery)) throw new AdoptError(`--review-every \`${reviewEvery}\` isn't a period like 30d, 12w, 6m or 1y`);
   const { repo, config, configPath, knowledge } = repoPaths(root);
   const codeowners = loadCodeowners(repo);
+  // --dates-from's sources, refused before any page is read: a wrong path changes no byte.
+  const dating = opts.datesFrom?.length
+    ? {
+        sources: opts.datesFrom.map((dir) => {
+          const index = contentIndex(resolve(dir));
+          if ("refused" in index) throw new AdoptError(`--dates-from \`${dir}\` ${index.refused}`);
+          return index;
+        }),
+        own: (() => {
+          const index = contentIndex(repo);
+          return "refused" in index ? null : index;
+        })(),
+        /** By page path: the index whose date it got, or "today". */
+        by: new Map<string, ContentIndex | "today">(),
+      }
+    : null;
 
   const found = { files: [] as string[], symlinks: [] as string[] };
   walk(knowledge, found);
@@ -340,12 +427,33 @@ export function adoptRepo(root: string, opts: AdoptOptions): AdoptResult {
   const sources = found.files.sort().map((abs) => read(abs, repo, knowledge));
   const ids = assignIds(sources);
   const knowledgeRel = rel(knowledge);
-  const dates = lastCommitDates(repo, knowledgeRel);
+  const dates = dating ? new Map<string, string>() : lastCommitDates(repo, knowledgeRel);
   const today = formatDate(utcToday(opts.now));
   const unowned = new Map<string, string[]>(); // CODEOWNERS problem → pages --team owns despite it
   const writes: { abs: string; text: string; inside: string }[] = [];
   const unknownKeys = new Set<string>();
   const leftDests: LeftLink[] = []; // the links left, with CommonMark's destination for each
+
+  /**
+   * A page's date. Without --dates-from, its last commit here by path, else today. With it, by
+   * content: the newest commit with its bytes in a --dates-from repo (a copy committed here
+   * mustn't beat its source), else in this repo's own history, else today.
+   */
+  const dateFor = (s: Source): string => {
+    if (!dating) return dates.get(s.path) || today;
+    const bytes = readFileSync(s.abs);
+    let pick: { date: string; from: ContentIndex } | null = null;
+    for (const index of dating.sources) {
+      const date = newestIn(index, bytes);
+      if (date && (!pick || date > pick.date)) pick = { date, from: index };
+    }
+    if (!pick && dating.own) {
+      const date = newestIn(dating.own, bytes);
+      if (date) pick = { date, from: dating.own };
+    }
+    dating.by.set(s.path, pick ? pick.from : "today");
+    return pick ? pick.date : today;
+  };
 
   /** The fields a page lacks, as lines to insert, and its frontmatter with them added; or why it gets none. */
   const addedFields = (s: Source, missing: Field[]): { lines: string; merged: Record<string, unknown>; ownerProblem?: string } | { problem: string } => {
@@ -362,7 +470,7 @@ export function adoptRepo(root: string, opts: AdoptOptions): AdoptResult {
       type: typeFor(s.dirs),
       status: "draft",
       owner_team: owner.team,
-      last_verified: dates.get(s.path) || today,
+      last_verified: missing.includes("last_verified") ? dateFor(s) : "",
       review_every: reviewEvery,
     };
     const merged = { ...s.data, ...Object.fromEntries(missing.map((f) => [f, values[f]])) };
@@ -490,6 +598,13 @@ export function adoptRepo(root: string, opts: AdoptOptions): AdoptResult {
       if (!lstatSync(w.abs).isFile() || lstatSync(w.abs).nlink > 1 || !within(w.inside, realpathSync(w.abs))) throw new AdoptError(`${rel(w.abs)} changed while adopt ran; nothing written`);
     }
     for (const w of writes) writeFileSync(w.abs, w.text);
+  }
+  if (dating) {
+    // Counted over the pages adopted: a page left after it was dated got no date.
+    const count = (index: ContentIndex) => result.adopted.filter((path) => dating.by.get(path) === index).length;
+    result.datedFrom = dating.sources.map((index) => ({ repo: index.repo, pages: count(index) }));
+    if (dating.own && count(dating.own)) result.datedFrom.push({ repo: dating.own.repo, pages: count(dating.own) });
+    result.datedToday = result.adopted.filter((path) => dating.by.get(path) === "today");
   }
   return result;
 }

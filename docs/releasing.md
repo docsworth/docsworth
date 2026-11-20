@@ -44,7 +44,7 @@ to a GitHub release.
 run with `npx` from this npm package. The registry accepts a listing only when the npm
 version it names has the same name as `mcpName` in its `package.json`, so the guard holds
 `server.json`'s name and versions to `package.json`'s, in the repository and in the packed
-tarball. 0.3.1 and earlier have no `mcpName`: the first listing waits for the release after.
+tarball. 0.3.1 and earlier have no `mcpName`; 0.3.2 is the first version listed.
 
 Publishing it is separate from the npm release, after it, with the registry's
 `mcp-publisher` (`validate`, then `publish`). Only an owner of the `docsworth` GitHub org
@@ -52,6 +52,20 @@ may publish under `io.github.docsworth/`, and the registry's device-flow GitHub 
 publish under an organization: sign in with a classic token with `read:org`, or from GitHub
 Actions with OIDC (the registry's
 [authentication docs](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/authentication.mdx)).
+
+Each release lists its own version. Once npm serves it, from a checkout of the tag, signed
+in to `gh` as an org owner whose token has `read:org` (`gh auth status` lists the scopes):
+
+```bash
+mcp-publisher login github --token "$(gh auth token)"
+mcp-publisher validate
+mcp-publisher publish
+mcp-publisher logout
+```
+
+`mcp-publisher` takes the token as an argument, so it's in the process list while `login`
+runs. `logout` removes the registry credential `login` saved. The listing reads back at
+`https://registry.modelcontextprotocol.io/v0.1/servers/io.github.docsworth%2Fdocsworth/versions/latest`.
 
 ## Repository setup, once
 

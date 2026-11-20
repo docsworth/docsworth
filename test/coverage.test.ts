@@ -1,7 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { computeCoverage } from "../src/core/coverage.js";
 import { loadRepo } from "../src/core/repo.js";
-import { listStale } from "../src/core/stale.js";
+import { listDrafts, listStale } from "../src/core/stale.js";
 import { ACME, INDEX, makeRepo, NOW, page } from "./helpers.js";
 
 const cleanups: (() => void)[] = [];
@@ -95,5 +96,66 @@ describe("stale", () => {
     const r = makeRepo({ ...INDEX, "knowledge/x.md": page({ id: "x", owner_team: "payments" }) });
     cleanups.push(r.cleanup);
     expect(listStale(r.pages, r, NOW)).toMatchObject([{ id: "x", reason: "unowned" }]);
+  });
+});
+
+describe("drafts: the verify queue", () => {
+  const draftRepo = () => {
+    const r = makeRepo({
+      ...INDEX,
+      // Same content date as `b-old`, so the path decides: a before b.
+      "knowledge/a-old.md": page({ id: "a-old", title: "A old", status: "draft", last_verified: "2026-03-01" }),
+      "knowledge/b-old.md": page({ id: "b-old", title: "B old", status: "draft", last_verified: "2026-03-01" }),
+      "knowledge/new.md": page({ id: "new", title: "New", status: "draft", last_verified: "2026-10-30" }),
+      "knowledge/mid.md": page({ id: "mid", title: "Mid", status: "draft", last_verified: "2026-08-10", owner_team: "payments" }),
+      "knowledge/canon.md": page({ id: "canon", title: "Canonical", last_verified: "2026-11-01" }),
+      "knowledge/old-canon.md": page({ id: "old-canon", title: "Retired", status: "deprecated", last_verified: "2026-11-01" }),
+    }, { codeowners: "/knowledge/ @acme/platform\n/knowledge/mid.md @acme/payments\n" });
+    cleanups.push(r.cleanup);
+    return r;
+  };
+
+  it("lists only drafts, newest content first, then by path", () => {
+    const r = draftRepo();
+    expect(listDrafts(r.pages, r, NOW).map((d) => d.id)).toEqual(["new", "mid", "a-old", "b-old"]);
+    // The loader happens to sort by path; the queue mustn't depend on it.
+    expect(listDrafts([...r.pages].reverse(), r, NOW).map((d) => d.id)).toEqual(["new", "mid", "a-old", "b-old"]);
+  });
+
+  it("filters by owner team", () => {
+    const r = draftRepo();
+    expect(listDrafts(r.pages, r, NOW, "payments").map((d) => d.id)).toEqual(["mid"]);
+  });
+
+  it("gives each draft's content date and SLA state", () => {
+    const r = draftRepo();
+    // 2026-10-30 + 90d is far off; 2026-08-10 + 90d is 2026-11-08, within the default 14 due_soon_days of NOW; 2026-03-01 + 90d has passed.
+    expect(listDrafts(r.pages, r, NOW)).toEqual([
+      { id: "new", title: "New", path: "knowledge/new.md", owner_team: "platform", changed: "2026-10-30", sla_state: "fresh" },
+      { id: "mid", title: "Mid", path: "knowledge/mid.md", owner_team: "payments", changed: "2026-08-10", sla_state: "due_soon" },
+      { id: "a-old", title: "A old", path: "knowledge/a-old.md", owner_team: "platform", changed: "2026-03-01", sla_state: "overdue" },
+      { id: "b-old", title: "B old", path: "knowledge/b-old.md", owner_team: "platform", changed: "2026-03-01", sla_state: "overdue" },
+    ]);
+  });
+
+  it("finds the example's one draft and nothing canonical or deprecated", () => {
+    const repo = loadRepo(ACME);
+    expect(listDrafts(repo.pages, repo, NOW).map((d) => d.id)).toEqual(["rb-payments-chargeback"]);
+  });
+
+  it("prints the queue, and the same as JSON, through the real CLI", () => {
+    const r = draftRepo();
+    const cli = (...args: string[]) =>
+      execFileSync(process.execPath, ["--import", "tsx", "src/cli.ts", "--as-of", "2026-11-02", "drafts", r.root, ...args], { encoding: "utf8" });
+    const lines = cli().trimEnd().split("\n");
+    expect(lines.slice(0, 4)).toEqual([
+      "2026-10-30  fresh     @platform  knowledge/new.md    New",
+      "2026-08-10  due_soon  @payments  knowledge/mid.md    Mid",
+      "2026-03-01  overdue   @platform  knowledge/a-old.md  A old",
+      "2026-03-01  overdue   @platform  knowledge/b-old.md  B old",
+    ]);
+    expect(lines.slice(4)).toEqual(["", "4 drafts. A team verifies a page once it has read it: docsworth verify <path>"]);
+    expect(JSON.parse(cli("--json"))).toEqual(listDrafts(r.pages, r, NOW));
+    expect(cli("--owner-team", "payments").trimEnd().split("\n")[0]).toBe("2026-08-10  due_soon  @payments  knowledge/mid.md  Mid");
   });
 });
