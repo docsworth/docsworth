@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { linkSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { linkSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { redactLinks } from "../src/core/acl.js";
-import { adoptRepo } from "../src/core/adopt.js";
+import { AdoptError, adoptRepo } from "../src/core/adopt.js";
 import { verifyPages } from "../src/core/verify-pages.js";
 import { LOCAL_IDENTITY } from "../src/core/identity.js";
 import { lintRepo } from "../src/core/lint.js";
@@ -813,5 +813,241 @@ describe("git reads the knowledge root as a path, not a pathspec", () => {
     expect(dirty()).toBe(false);
     writeAll(root, { ":(glob)**/a.md": page("A, changed") });
     expect(dirty()).toBe(true);
+  });
+});
+
+describe("adopt --dates-from: copied pages keep their real dates", () => {
+  /** git in `dir`, each commit's author and committer dates pinned (committer defaults to author). */
+  const gitIn = (dir: string) => (date: string | { author: string; committer: string }, ...args: string[]) => {
+    const { author, committer } = typeof date === "string" ? { author: date, committer: date } : date;
+    return execFileSync("git", ["-C", dir, "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+      encoding: "utf8",
+      env: { ...process.env, GIT_AUTHOR_DATE: `${author}T12:00:00Z`, GIT_COMMITTER_DATE: `${committer}T12:00:00Z` },
+    });
+  };
+  /** A source repo whose commits, in order, write `files` on the pinned date. */
+  const source = (commits: { date: string | { author: string; committer: string }; files: Record<string, string> }[], init: string[] = []) => {
+    const dir = tempDir();
+    const git = gitIn(dir);
+    git("2025-01-01", "init", "-q", ...init);
+    for (const c of commits) {
+      writeAll(dir, c.files);
+      git(c.date, "add", "-A");
+      git(c.date, "commit", "-qm", "c");
+    }
+    return dir;
+  };
+  const dates = (root: string) => Object.fromEntries(loadRepo(root).pages.map((p) => [p.path, p.last_verified]));
+  const A = "# Alpha\n\nThe steps.\n";
+  const B = "# Alpha\n\nOther steps.\n";
+
+  it("dates a copied page by the source commit that has its content, under any name", () => {
+    const src = source([{ date: "2025-01-10", files: { "docs/alpha.md": A } }]);
+    const { root } = fixture({ "knowledge/runbooks/renamed.md": A });
+    const r = adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/runbooks/renamed.md": "2025-01-10" });
+    expect(r.datedFrom).toEqual([{ repo: realpathSync(src), pages: 1 }]);
+    expect(r.datedToday).toEqual([]);
+  });
+
+  it("dates today, and lists, a copy whose content no commit has: untracked, or tracked and edited", () => {
+    const src = source([{ date: "2025-01-10", files: { "docs/alpha.md": A } }]);
+    const { root } = fixture({ "knowledge/tracked.md": B });
+    const git = gitIn(root);
+    git("2025-06-01", "init", "-q");
+    git("2025-06-01", "add", "-A");
+    git("2025-06-01", "commit", "-qm", "copies");
+    writeFileSync(join(root, "knowledge/tracked.md"), `${B}Edited after the commit.\n`);
+    // Untracked: written after the commit.
+    writeFileSync(join(root, "knowledge/edited.md"), `${A}One more line.\n`);
+    const r = adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/edited.md": "2026-11-02", "knowledge/tracked.md": "2026-11-02" });
+    expect(r.datedToday).toEqual(["knowledge/edited.md", "knowledge/tracked.md"]);
+  });
+
+  it("without --dates-from, a tracked copy keeps the path's last commit date, as before", () => {
+    const { root } = fixture({ "knowledge/tracked.md": B });
+    const git = gitIn(root);
+    git("2025-06-01", "init", "-q");
+    git("2025-06-01", "add", "-A");
+    git("2025-06-01", "commit", "-qm", "copies");
+    writeFileSync(join(root, "knowledge/tracked.md"), `${B}Edited after the commit.\n`);
+    const r = adopt(root);
+    expect(dates(root)).toEqual({ "knowledge/tracked.md": "2025-06-01" });
+    // The new fields appear only with the option, so --json without it is as it was.
+    expect(Object.keys(r)).not.toContain("datedFrom");
+    expect(Object.keys(r)).not.toContain("datedToday");
+    expect(Object.keys(adopt(fixture({ "knowledge/x.md": A }).root, { datesFrom: [] }))).not.toContain("datedFrom");
+  });
+
+  it("gives content that came back the date it last came back", () => {
+    const src = source([
+      { date: "2025-01-01", files: { "docs/alpha.md": A } },
+      { date: "2025-02-01", files: { "docs/alpha.md": B } },
+      { date: "2025-03-01", files: { "docs/alpha.md": A } },
+    ]);
+    const { root } = fixture({ "knowledge/a.md": A, "knowledge/b.md": B });
+    adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-03-01", "knowledge/b.md": "2025-02-01" });
+  });
+
+  it("takes the greatest author date, not the first commit git walks", () => {
+    // The last commit (newest by committer date, walked first) is backdated by its author.
+    const src = source([
+      { date: { author: "2025-09-01", committer: "2025-09-01" }, files: { "docs/alpha.md": A } },
+      { date: { author: "2025-09-15", committer: "2025-09-15" }, files: { "docs/alpha.md": B } },
+      { date: { author: "2025-02-01", committer: "2025-10-01" }, files: { "docs/alpha.md": A } },
+    ]);
+    const { root } = fixture({ "knowledge/a.md": A });
+    adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-09-01" });
+  });
+
+  it("sees a merged branch's commits even when the merge's tree equals a parent's (--full-history)", () => {
+    const src = source([{ date: "2025-01-01", files: { "docs/alpha.md": A } }]);
+    const git = gitIn(src);
+    git("2025-04-01", "checkout", "-qb", "feat");
+    writeAll(src, { "docs/alpha.md": B });
+    git("2025-04-01", "commit", "-qam", "b");
+    writeAll(src, { "docs/alpha.md": A });
+    git("2025-04-02", "commit", "-qam", "a again");
+    git("2025-05-01", "checkout", "-q", "-");
+    writeAll(src, { "other.txt": "x\n" });
+    git("2025-05-01", "add", "-A");
+    git("2025-05-01", "commit", "-qm", "diverge");
+    git("2025-05-02", "merge", "-q", "--no-ff", "-m", "merge", "feat");
+    const { root } = fixture({ "knowledge/a.md": A });
+    adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-04-02" });
+  });
+
+  it("doesn't count a permission-only change as new content", () => {
+    const src = source([{ date: "2025-01-10", files: { "docs/alpha.md": A } }]);
+    const git = gitIn(src);
+    git("2025-06-01", "update-index", "--chmod=+x", "docs/alpha.md");
+    git("2025-06-01", "commit", "-qm", "chmod only");
+    const { root } = fixture({ "knowledge/a.md": A });
+    adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-01-10" });
+  });
+
+  it("matches content from the source's root commit with log.showRoot off (--root)", () => {
+    const src = source([{ date: "2025-01-15", files: { "docs/alpha.md": A } }]);
+    gitIn(src)("2025-01-15", "config", "log.showRoot", "false");
+    const { root } = fixture({ "knowledge/a.md": A });
+    adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-01-15" });
+  });
+
+  it("indexes the whole repository when given a directory inside it", () => {
+    const src = source([{ date: "2025-01-10", files: { "docs/alpha.md": A, "src/index.ts": "x\n" } }]);
+    const { root } = fixture({ "knowledge/a.md": A });
+    const r = adopt(root, { datesFrom: [join(src, "src")] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-01-10" });
+    expect(r.datedFrom).toEqual([{ repo: realpathSync(src), pages: 1 }]);
+  });
+
+  it("matches a CRLF copy of a source git stores with LF", () => {
+    const crlf = A.replace(/\n/g, "\r\n");
+    const src = source([{ date: "2025-01-20", files: { ".gitattributes": "*.md text eol=crlf\n", "docs/alpha.md": crlf } }]);
+    const { root } = fixture({ "knowledge/a.md": crlf });
+    adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-01-20" });
+  });
+
+  it("keeps a page's own last_verified", () => {
+    const src = source([{ date: "2025-01-10", files: { "docs/alpha.md": A } }]);
+    const { root } = fixture({ "knowledge/a.md": `---\nlast_verified: 2024-12-12\n---\n${A}` });
+    const r = adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2024-12-12" });
+    // Every source is listed, even at 0: "dated 0 pages from <repo>" flags a wrong path.
+    expect(r.datedFrom).toEqual([{ repo: realpathSync(src), pages: 0 }]);
+    expect(r.datedToday).toEqual([]);
+  });
+
+  it("prefers the source's date to a later commit of the copy here, and dates from here what no source has", () => {
+    const src = source([{ date: "2025-01-10", files: { "docs/alpha.md": A } }]);
+    const { root } = fixture({ "knowledge/copy.md": A, "knowledge/own.md": B });
+    const git = gitIn(root);
+    git("2026-11-01", "init", "-q");
+    git("2026-11-01", "add", "-A");
+    git("2026-11-01", "commit", "-qm", "copies");
+    const r = adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/copy.md": "2025-01-10", "knowledge/own.md": "2026-11-01" });
+    expect(r.datedFrom).toEqual([
+      { repo: realpathSync(src), pages: 1 },
+      { repo: realpathSync(root), pages: 1 },
+    ]);
+  });
+
+  it("takes the newest date across several sources", () => {
+    const older = source([{ date: "2025-01-01", files: { "a.md": A } }]);
+    const newer = source([{ date: "2025-08-08", files: { "b.md": A } }]);
+    const { root } = fixture({ "knowledge/a.md": A });
+    const r = adopt(root, { datesFrom: [older, newer] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-08-08" });
+    expect(r.datedFrom).toEqual([
+      { repo: realpathSync(older), pages: 0 },
+      { repo: realpathSync(newer), pages: 1 },
+    ]);
+  });
+
+  it("ignores git variables in the environment that would redirect it or read the globs literally", () => {
+    const src = source([{ date: "2025-04-04", files: { "docs/alpha.md": A } }]);
+    const { root } = fixture({ "knowledge/a.md": A });
+    const saved = { dir: process.env.GIT_DIR, literal: process.env.GIT_LITERAL_PATHSPECS };
+    process.env.GIT_DIR = join(tempDir(), "nowhere.git");
+    process.env.GIT_LITERAL_PATHSPECS = "1";
+    try {
+      adopt(root, { datesFrom: [src] });
+    } finally {
+      for (const [key, value] of [["GIT_DIR", saved.dir], ["GIT_LITERAL_PATHSPECS", saved.literal]] as const)
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    }
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-04-04" });
+  });
+
+  it("works with a sha256 repository", () => {
+    const src = source([{ date: "2025-03-03", files: { "docs/alpha.md": A } }], ["--object-format=sha256"]);
+    const { root } = fixture({ "knowledge/a.md": A });
+    adopt(root, { datesFrom: [src] });
+    expect(dates(root)).toEqual({ "knowledge/a.md": "2025-03-03" });
+  });
+
+  it("refuses a path that isn't a git repository, or one with no commits, changing nothing", () => {
+    const { root } = fixture({ "knowledge/a.md": A });
+    const before = snapshot(root);
+    const plain = tempDir();
+    const empty = tempDir();
+    gitIn(empty)("2025-01-01", "init", "-q");
+    const refusal = (dir: string) => {
+      try {
+        adopt(root, { datesFrom: [dir] });
+      } catch (err) {
+        return err as Error;
+      }
+      throw new Error("adopt didn't refuse");
+    };
+    const notGit = refusal(plain);
+    expect(notGit).toBeInstanceOf(AdoptError);
+    expect(notGit.message).toBe(`--dates-from \`${plain}\` isn't a git repository`);
+    const noCommits = refusal(empty);
+    expect(noCommits).toBeInstanceOf(AdoptError);
+    expect(noCommits.message).toBe(`--dates-from \`${empty}\` has no commits to date pages from`);
+    expect(snapshot(root)).toEqual(before);
+  });
+
+  it("reports what it dated, through the real CLI", () => {
+    const src = source([{ date: "2025-01-10", files: { "docs/alpha.md": A } }]);
+    const { root } = fixture({ "knowledge/a.md": A, "knowledge/new.md": B });
+    const cli = (...args: string[]) =>
+      execFileSync(process.execPath, ["--import", "tsx", "src/cli.ts", "--as-of", "2026-11-02", "adopt", root, "--dates-from", src, "--dry-run", ...args], { encoding: "utf8" });
+    const lines = cli().split("\n");
+    expect(lines).toContain(`dated      1 page from ${realpathSync(src)}`);
+    expect(lines).toContain("today      knowledge/new.md: no commit here or in --dates-from has this content");
+    expect(JSON.parse(cli("--json"))).toMatchObject({ datedFrom: [{ repo: realpathSync(src), pages: 1 }], datedToday: ["knowledge/new.md"] });
+    const plainLines = execFileSync(process.execPath, ["--import", "tsx", "src/cli.ts", "--as-of", "2026-11-02", "adopt", root, "--dry-run"], { encoding: "utf8" }).split("\n");
+    expect(plainLines.filter((l) => /^(dated|today) /.test(l))).toEqual([]);
   });
 });

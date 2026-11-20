@@ -12,6 +12,7 @@ import { computeCoverage, formatCoverage } from "./core/coverage.js";
 import { parseDate } from "./core/duration.js";
 import { IdentityProvider } from "./core/identity.js";
 import { githubRemote, initRepo } from "./core/init.js";
+import { localOnlyRepo } from "./core/git.js";
 import { formatDiagnostics, lintRepo } from "./core/lint.js";
 import { auditTransport } from "./core/mcp/audit-transport.js";
 import { createMcpServer } from "./core/mcp/server.js";
@@ -21,7 +22,7 @@ import { EXTENSION_ID } from "./core/serve/auth.js";
 import { DEFAULT_PORT, startServer } from "./core/serve/server.js";
 import { loadToken } from "./core/serve/token.js";
 import { KnowledgeService } from "./core/service.js";
-import { listStale } from "./core/stale.js";
+import { listDrafts, listStale } from "./core/stale.js";
 import { printable, printableJson } from "./core/printable.js";
 import { verifyPages } from "./core/verify-pages.js";
 import { PACKAGE_NAME, PACKAGE_VERSION } from "./core/version.js";
@@ -237,10 +238,16 @@ program
   .argument("[dir]", "knowledge repo root", ".")
   .option("--team <team>", "owning team for pages CODEOWNERS gives no single team")
   .option("--review-every <period>", "review period for pages without one", "90d")
+  .option(
+    "--dates-from <repo>",
+    "a git repo the pages were copied from: date each page by the newest commit there with its exact content (repeatable)",
+    (repo: string, repos: string[]) => [...repos, repo],
+    [] as string[],
+  )
   .option("--dry-run", "report what would change; write nothing")
   .option("--json", "machine-readable output")
-  .action((dir: string, opts: { team?: string; reviewEvery: string; dryRun?: boolean; json?: boolean }) => {
-    const r = adoptRepo(resolve(dir), { now: now(), team: opts.team, reviewEvery: opts.reviewEvery, dryRun: opts.dryRun });
+  .action((dir: string, opts: { team?: string; reviewEvery: string; datesFrom: string[]; dryRun?: boolean; json?: boolean }) => {
+    const r = adoptRepo(resolve(dir), { now: now(), team: opts.team, reviewEvery: opts.reviewEvery, datesFrom: opts.datesFrom.map((repo) => resolve(repo)), dryRun: opts.dryRun });
     if (opts.json) return console.log(printableJson(r));
     // Paths, links, keys and reasons quote what pages hold: printed escaped.
     const say = (line: string) => console.log(printable(line));
@@ -249,6 +256,8 @@ program
     if (r.extraFields.length) say(`config     frontmatter.extra_fields gains ${r.extraFields.join(", ")}`);
     for (const h of r.hints) say(`hint       ${h}`);
     const n = (count: number, what: string) => `${count} ${what}${count === 1 ? "" : "s"}`;
+    for (const d of r.datedFrom ?? []) say(`dated      ${n(d.pages, "page")} from ${d.repo}`);
+    for (const path of r.datedToday ?? []) say(`today      ${path}: no commit here or in --dates-from has this content`);
     console.log(
       `\n${r.dryRun ? "Would adopt" : "Adopted"} ${n(r.adopted.length, "page")} (${r.unchanged.length} unchanged, ${r.left.length} left); ` +
         `${r.linksRewritten} ${r.linksRewritten === 1 ? "link" : "links"} rewritten, ${r.linksLeft.length} left.`,
@@ -256,7 +265,7 @@ program
     console.log(
       r.dryRun
         ? "Dry run: nothing written."
-        : `Nothing is committed. Review the diff, run \`docsworth lint ${dir}\`, and open a pull request: adopted pages are drafts, cited once their team runs \`docsworth verify\`.`,
+        : `Nothing is committed. Review the diff, run \`docsworth lint ${dir}\`, and ${localOnlyRepo(dir) ? "commit it" : "open a pull request"}: adopted pages are drafts, cited once their team runs \`docsworth verify\`.`,
     );
   });
 
@@ -273,7 +282,12 @@ program
     if (opts.json) return console.log(printableJson(r));
     for (const l of r.left) console.log(printable(`left  ${l.path}: ${l.reason}`));
     console.log(`\n${r.dryRun ? "Would verify" : "Verified"} ${r.verified.length} page${r.verified.length === 1 ? "" : "s"} (${r.unchanged.length} already verified today, ${r.left.length} left).`);
-    console.log(r.dryRun ? "Dry run: nothing written." : "Nothing is committed: open a pull request, which the owning team reviews.");
+    if (r.dryRun) return console.log("Dry run: nothing written.");
+    console.log(
+      localOnlyRepo(resolve(opts.dir))
+        ? "Nothing is committed: this repository has no remote, so review the diff and commit it."
+        : "Nothing is committed: open a pull request, which the owning team reviews.",
+    );
   });
 
 program
@@ -288,6 +302,25 @@ program
     if (opts.json) return console.log(JSON.stringify(stale, null, 2));
     for (const s of stale) console.log(`${s.reason.padEnd(10)} ${s.id.padEnd(30)} @${s.owner_team.padEnd(10)} ${s.detail}`);
     console.log(`${stale.length} stale or unowned pages`);
+  });
+
+program
+  .command("drafts")
+  .description("the verify queue: draft pages, newest content first (a draft with invalid frontmatter is a lint error, not listed: run lint first)")
+  .argument("[dir]", "knowledge repo root", ".")
+  .option("--owner-team <team>", "only this team's pages")
+  .option("--json", "machine-readable output")
+  .action((dir: string, opts: { ownerTeam?: string; json?: boolean }) => {
+    const repo = repoAt(dir);
+    const drafts = listDrafts(repo.pages, repo, now(), opts.ownerTeam);
+    if (opts.json) return console.log(printableJson(drafts));
+    // Column widths, once: a reduce, not a spread, so a long queue can't overflow the call stack.
+    const widest = (f: (d: (typeof drafts)[number]) => string) => drafts.reduce((w, d) => Math.max(w, f(d).length), 0);
+    const [states, owners, paths] = [widest((d) => d.sla_state), widest((d) => `@${d.owner_team}`), widest((d) => d.path)];
+    // Titles and paths quote what pages hold: printed escaped.
+    for (const d of drafts) console.log(printable(`${d.changed}  ${d.sla_state.padEnd(states)}  ${`@${d.owner_team}`.padEnd(owners)}  ${d.path.padEnd(paths)}  ${d.title}`));
+    const n = `${drafts.length} ${drafts.length === 1 ? "draft" : "drafts"}`;
+    console.log(drafts.length ? `\n${n}. A team verifies a page once it has read it: docsworth verify <path>` : `${n}.`);
   });
 
 program

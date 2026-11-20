@@ -7,12 +7,12 @@
     "url": "https://github.com/docsworth/docsworth",
     "source": "github"
   },
-  "version": "0.3.2",
+  "version": "0.3.3",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@docsworth/cli",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "runtimeHint": "npx",
       "transport": { "type": "stdio" },
       "packageArguments": [{ "type": "positional", "value": "mcp" }],

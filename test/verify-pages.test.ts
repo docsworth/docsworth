@@ -194,4 +194,25 @@ describe("the CLI: adopt, then verify", () => {
     expect(refused).toMatchObject({ code: 2, out: "" });
     expect(refused.err).toBe(`docsworth: ${join(root, ".knowledge")} is outside the knowledge root (knowledge); verify changes only pages there\n`);
   });
+
+  it("tells a git repository with no remote to commit, and one with a remote to open a pull request", () => {
+    const { root } = fixture({ "knowledge/a.md": fm("a", "draft", "2026-01-01"), "knowledge/b.md": fm("b", "draft", "2026-01-01"), "knowledge/c.md": "# C\n" });
+    const cli = (...args: string[]) => spawnSync("npx", ["tsx", "src/cli.ts", "--as-of", "2026-11-02", ...args], { encoding: "utf8" }).stdout;
+    const git = (...args: string[]) => expect(spawnSync("git", ["-C", root, ...args]).status).toBe(0);
+    const pr = "Nothing is committed: open a pull request, which the owning team reviews.";
+    const commit = "Nothing is committed: this repository has no remote, so review the diff and commit it.";
+    git("init", "-q");
+
+    expect(cli("verify", join(root, "knowledge/a.md"), "--dir", root)).toBe(`\nVerified 1 page (0 already verified today, 0 left).\n${commit}\n`);
+    const adopted = cli("adopt", root, "--team", "docs").trimEnd().split("\n").at(-1);
+    expect(adopted).toBe(`Nothing is committed. Review the diff, run \`docsworth lint ${root}\`, and commit it: adopted pages are drafts, cited once their team runs \`docsworth verify\`.`);
+
+    // A remote, of any kind, is where the pull request goes: the messages are today's.
+    git("remote", "add", "origin", "https://example.com/acme/knowledge.git");
+    expect(cli("verify", join(root, "knowledge/b.md"), "--dir", root)).toBe(`\nVerified 1 page (0 already verified today, 0 left).\n${pr}\n`);
+    expect(cli("adopt", root, "--dry-run").trimEnd().split("\n").at(-1)).toBe("Dry run: nothing written.");
+    expect(cli("adopt", root).trimEnd().split("\n").at(-1)).toBe(
+      `Nothing is committed. Review the diff, run \`docsworth lint ${root}\`, and open a pull request: adopted pages are drafts, cited once their team runs \`docsworth verify\`.`,
+    );
+  });
 });

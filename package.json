@@ -1,6 +1,6 @@
 {
   "name": "@docsworth/cli",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Git-native knowledge layer for coding agents: team-owned pages, review SLAs, a citation gate, and an MCP server agents read for free.",
   "mcpName": "io.github.docsworth/docsworth",
   "type": "module",

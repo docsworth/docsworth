@@ -1,5 +1,6 @@
 import { pageStatus } from "./gate.js";
 import type { Page, Repo } from "./repo.js";
+import type { SlaState } from "./sla.js";
 
 export interface StaleEntry {
   id: string;
@@ -31,4 +32,26 @@ export function listStale(pages: Page[], repo: Repo, now: Date, ownerTeam?: stri
     else if (s.sla.state === "unverified") out.push({ ...base, reason: "unverified", detail: "no valid last_verified" });
   }
   return out.sort((a, b) => (a.due ?? "").localeCompare(b.due ?? ""));
+}
+
+export interface DraftEntry {
+  id: string;
+  title: string;
+  path: string;
+  owner_team: string;
+  /** When the content last changed: a draft's `last_verified`, which adopt takes from history. */
+  changed: string;
+  sla_state: SlaState;
+}
+
+/**
+ * The verify queue (`docsworth drafts`): every draft, newest content first, then by path.
+ * Only loaded pages: a draft whose frontmatter is invalid is a lint error, not an entry.
+ * Callers pass an ACL-filtered page list.
+ */
+export function listDrafts(pages: Page[], repo: Repo, now: Date, ownerTeam?: string): DraftEntry[] {
+  return pages
+    .filter((p) => p.status === "draft" && (!ownerTeam || p.owner_team === ownerTeam))
+    .map((p) => ({ id: p.id, title: p.title, path: p.path, owner_team: p.owner_team, changed: p.last_verified, sla_state: pageStatus(p, repo, now).sla.state }))
+    .sort((a, b) => b.changed.localeCompare(a.changed) || a.path.localeCompare(b.path));
 }
