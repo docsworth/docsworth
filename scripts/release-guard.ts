@@ -1,6 +1,6 @@
 // Refuses a release tag that can't be published as ours. The release workflow runs it
 // before anything else; a person can run it before tagging:
-//   npx tsx scripts/release-guard.ts v0.3.3 [--tarball <package.tgz>]
+//   npx tsx scripts/release-guard.ts v0.4.0 [--tarball <package.tgz>]
 // It prints every problem and exits 1 if there is one.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -14,6 +14,8 @@ export type ReleaseState = {
   codeVersion: string;
   pluginVersion: string;
   published: string | null;
+  /** What the plugin launcher runs: its PLUGIN_PACKAGE, or null when it declares none. */
+  launcher: string | null;
   notes: boolean;
   /** package.json's mcpName: the MCP registry reads it from npm to accept the listing. */
   mcpName: string | undefined;
@@ -23,6 +25,20 @@ export type ReleaseState = {
 
 /** The parts of server.json (the MCP registry's listing) that must agree with package.json. */
 export type McpListing = { name?: string; version?: string; packages?: readonly { registryType?: string; identifier?: string; version?: string }[] };
+
+/** The plugin's MCP launcher, which runs the published package by npx. */
+export const LAUNCHER = "plugin/bin/docsworth-mcp.mjs";
+
+/**
+ * The package the launcher runs: the string of its one `const PLUGIN_PACKAGE = "…";` line.
+ * Null when there's none, more than one, or anything but a plain string, so a launcher the
+ * guard can't read is refused rather than passed.
+ */
+export function launcherPackage(source: string): string | null {
+  const lines = [...source.matchAll(/^const PLUGIN_PACKAGE = (.*);$/gm)];
+  if (lines.length !== 1) return null;
+  return /^"([^"\\]+)"$/.exec(lines[0]![1]!)?.[1] ?? null;
+}
 
 /** Every reason this tag can't be released; empty when it can. */
 export function releaseProblems(s: ReleaseState): string[] {
@@ -41,6 +57,10 @@ export function releaseProblems(s: ReleaseState): string[] {
     if (name !== s.name) out.push(`PUBLISHED_PACKAGE names ${name}, but package.json is ${s.name}`);
     if (!inRange(s.version, range)) out.push(`${s.version} isn't in PUBLISHED_PACKAGE's range ${range}, so installs wouldn't get it`);
   }
+  // The plugin runs exactly the release it ships with: Anthropic's plugin directory refuses
+  // a launcher that runs a range (https://claude.com/docs/plugins/pre-submission-checklist.md).
+  if (s.launcher === null) out.push(`the plugin launcher (${LAUNCHER}) declares no PLUGIN_PACKAGE`);
+  else if (s.launcher !== `${PACKAGE_NAME}@${s.version}`) out.push(`the plugin launcher runs ${s.launcher}, not exactly ${PACKAGE_NAME}@${s.version}`);
   if (!s.notes) out.push(`there are no release notes at docs/release-notes/${s.tag}.md`);
   out.push(...listingProblems(s));
   return out;
@@ -107,6 +127,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename
     codeVersion: PACKAGE_VERSION,
     pluginVersion: plugin.version,
     published: PUBLISHED_PACKAGE,
+    launcher: existsSync(join(root, LAUNCHER)) ? launcherPackage(readFileSync(join(root, LAUNCHER), "utf8")) : null,
     notes: existsSync(join(root, "docs/release-notes", `${tag}.md`)),
     mcpName: pkg.mcpName,
     server: existsSync(serverFile) ? (JSON.parse(readFileSync(serverFile, "utf8")) as McpListing) : null,

@@ -10,7 +10,7 @@ import { CONFIG_PATH } from "./config.js";
 import { formatDate, utcToday } from "./duration.js";
 import { pageStatus } from "./gate.js";
 import { polishChanges, polishSummary } from "./polish.js";
-import { MIRRORED_NOTE, NOT_CITABLE_NOTE } from "./mcp/text.js";
+import { MIRRORED_NOTE, NOT_CITABLE_NOTE, WITHHELD_BY_POLICY_NOTE, WITHHELD_NOTE } from "./mcp/text.js";
 import { buildNewPage, NEW_PAGE_PREFIX, type NewPageType, slugify } from "./new-page.js";
 import { type Policy, toolRefusal } from "./policy.js";
 import { WRITE_TOOLS } from "./tool-registry.js";
@@ -53,6 +53,21 @@ export interface PageSummary {
   due: string | null;
   sla_state: string;
   citable: boolean;
+}
+
+/**
+ * A repo page as `read` shows it. `content` is there only for a citable page, or when the
+ * caller asked with `include_stale` and the policy allows it; otherwise `note` says why it isn't.
+ */
+export interface ReadPage extends PageSummary {
+  review_every: string;
+  acl: string;
+  supersedes: string[];
+  applies_to: string[];
+  flags: string[];
+  gate_reason?: string;
+  content?: string;
+  note?: string;
 }
 
 export interface SearchResult extends PageSummary {
@@ -533,21 +548,19 @@ export class KnowledgeService {
     return { results, excluded, ...(mirrored.length ? { mirrored } : {}), ...(notes.length ? { note: notes.join(" ") } : {}), ...(asText ? { snippets: "text" as const } : {}) };
   }
 
-  async read(args: { id: string }) {
-    return this.readAs("read", args, true);
-  }
-
-  /** read() for `tool`: the same view; only an agent's `read` goes in the usage log. */
-  private async readAs(tool: string, args: { id: string }, usage: boolean) {
-    return (await this.readWith(tool, args, usage)).shown;
+  /** A page that isn't citable comes back without its text unless `include_stale` (and the policy allows it). */
+  async read(args: { id: string; include_stale?: boolean }) {
+    return (await this.readWith("read", args, true, false)).shown;
   }
 
   /**
-   * `readAs`, with what it read: the page, the caller and the repo, from the one look at the
-   * repo after the only await. A caller that builds more of its answer from these (ui_page's
-   * links) answers from that same look, as `read` does: a reload after it can't mix in.
+   * `read` for `tool`, with what it read: the page, the caller and the repo, from the one look
+   * at the repo after the only await. A caller that builds more of its answer from these
+   * (ui_page's links) answers from that same look, as `read` does: a reload after it can't mix
+   * in. Only an agent's `read` goes in the usage log. `alwaysText`: the page's text even when
+   * it isn't citable (ui_page, the web app's view).
    */
-  private async readWith(tool: string, args: { id: string }, usage: boolean) {
+  private async readWith(tool: string, args: { id: string; include_stale?: boolean }, usage: boolean, alwaysText: boolean) {
     const who = await this.identity.get();
     this.permit(tool, who);
     if (typeof args.id === "string" && args.id.startsWith("mirror:")) return { kind: "mirror" as const, shown: this.readMirror(args.id, who) };
@@ -562,7 +575,11 @@ export class KnowledgeService {
     ];
     if (usage) this.noteRead("read", [page]);
     else this.taint([page]);
-    const shown = {
+    // Decided here, after the only await, from the look at the repo `permit` just took: a
+    // policy that changed while the identity was resolving is already in force.
+    const denied = repo.config.policy.include_stale === "denied";
+    const withText = s.citable || alwaysText || (Boolean(args.include_stale) && !denied);
+    const shown: ReadPage = {
       ...this.summary(page),
       review_every: page.review_every,
       acl: page.acl,
@@ -577,7 +594,8 @@ export class KnowledgeService {
       applies_to: page.applies_to ?? [],
       flags,
       ...(s.citable ? {} : { gate_reason: s.gate_reason }),
-      content: this.pageText(page, who),
+      // A page that isn't citable: its owner and why, never its text, as search's `excluded`.
+      ...(withText ? { content: this.pageText(page, who) } : { note: args.include_stale && denied ? WITHHELD_BY_POLICY_NOTE : WITHHELD_NOTE }),
     };
     return { kind: "page" as const, shown, page, who, repo };
   }
@@ -759,11 +777,13 @@ export class KnowledgeService {
    * links to, so the app can route those links. Taints the session with the page and those.
    */
   async uiPage(args: { id: string }) {
-    const r = await this.readWith("ui_page", args, false);
+    // The web app shows every visible page's text, labelled: a person reads it to fix it.
+    const r = await this.readWith("ui_page", { id: args.id }, false, true);
     if (r.kind === "mirror") return { ...r.shown, links: {} }; // a mirrored page links to no repo page
     // The links come from the look at the repo the read took, with its caller: the links in
     // what the caller is shown, never a later look that a reload could have changed.
-    const { shown, page, who, repo } = r;
+    const { page, who, repo } = r;
+    const shown = { ...r.shown, content: r.shown.content ?? "" }; // always there: read with alwaysText
     // The links in what the caller is shown: redaction can drop a whole line, and a link to
     // a visible page on it with it, which then names nothing and taints nothing.
     const linked = new Map<string, Page>();

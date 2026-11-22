@@ -261,12 +261,43 @@ describe("audit at the JSON-RPC boundary", () => {
     const bad = new MemorySink(true);
     bad.fail = true;
     const { call, audit } = await connect(service, [good, bad], async () => LOCAL_IDENTITY);
-    const r = await call("read", { id: "rb-scale-cluster" });
+    // With its text: the page is recorded as returned.
+    const r = await call("read", { id: "rb-scale-cluster", include_stale: true });
     await audit.flush();
     expect(r.data!.error.code).toBe("unavailable");
     expect(good.events.map((e) => [e.seq, e.outcome, e.code ?? null, e.returned ?? null, e.detail ?? null])).toEqual([
       [1, "ok", null, ["rb-scale-cluster"], null],
       [2, "error", "audit_unavailable", null, { withheld_seq: 1 }],
+    ]);
+  });
+
+  it("corrects a read that left the text out the same way: recorded as excluded, then withheld", async () => {
+    const { service } = localAcme();
+    const good = new MemorySink(true);
+    const bad = new MemorySink(true);
+    bad.fail = true;
+    const { call, audit } = await connect(service, [good, bad], async () => LOCAL_IDENTITY);
+    const r = await call("read", { id: "rb-scale-cluster" });
+    await audit.flush();
+    expect(r.data!.error.code).toBe("unavailable");
+    expect(good.events.map((e) => [e.seq, e.outcome, e.code ?? null, e.returned ?? null, e.excluded ?? null, e.detail ?? null])).toEqual([
+      [1, "ok", null, null, ["rb-scale-cluster"], null],
+      [2, "error", "audit_unavailable", null, null, { withheld_seq: 1 }],
+    ]);
+  });
+
+  it("records a read that left the text out as excluded, and one with the text as returned", async () => {
+    const { service } = localAcme();
+    const sink = new MemorySink();
+    const { call, audit } = await connect(service, [sink], async () => LOCAL_IDENTITY);
+    await call("read", { id: "rb-scale-cluster" });
+    await call("read", { id: "rb-scale-cluster", include_stale: true });
+    await call("read", { id: "rb-deploy-prod" });
+    await audit.flush();
+    expect(sink.events.map((e) => [e.outcome, e.args ?? null, e.returned ?? null, e.excluded ?? null])).toEqual([
+      ["ok", { id: "rb-scale-cluster" }, null, ["rb-scale-cluster"]],
+      ["ok", { id: "rb-scale-cluster", include_stale: true }, ["rb-scale-cluster"], null],
+      ["ok", { id: "rb-deploy-prod" }, ["rb-deploy-prod"], null],
     ]);
   });
 
@@ -346,7 +377,7 @@ describe("audit at the JSON-RPC boundary", () => {
     const sink = new MemorySink(false);
     sink.fail = true;
     const { call } = await connect(service, [sink], async () => LOCAL_IDENTITY);
-    const r = await call("read", { id: "rb-scale-cluster" });
+    const r = await call("read", { id: "rb-scale-cluster", include_stale: true });
     expect(r.isError).toBe(false);
     expect(r.data!.content).toMatch(/autoscaler/);
   });

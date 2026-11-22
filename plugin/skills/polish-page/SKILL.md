@@ -13,7 +13,9 @@ review the diff.
 
 ## 1. Read the page
 
-Call `read` with the page id. Work from `content` exactly as returned: it's the page
+Call `read` with the page id and `include_stale: true`: without it, `read` leaves out the
+text of a page that isn't citable, and a page past its review date can still be polished.
+A polish doesn't make it citable. Work from `content` exactly as returned: it's the page
 body, without the frontmatter, which a polish never touches. If the user named a topic
 rather than a page, `search` first and confirm which page they mean.
 

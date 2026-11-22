@@ -176,7 +176,11 @@ describe("every tool, on random repos", () => {
         check("stale()", await s.stale());
         for (const path of ["", "runbooks", "security", "services", "services/ledger", "fz"]) check(`list(${path})`, await settle(() => s.list({ path })));
         for (const type of ["runbook", "guide", "adr", "service", "policy"] as const) check(`list(${type})`, await s.list({ type }));
-        for (const p of visible) check(`read(${p.id})`, await s.read({ id: p.id }));
+        // With include_stale too: a page that isn't citable shows its text, and its redaction, only then.
+        for (const p of visible) {
+          check(`read(${p.id})`, await s.read({ id: p.id }));
+          check(`read(${p.id}, include_stale)`, await s.read({ id: p.id, include_stale: true }));
+        }
         for (const p of hidden) {
           for (const query of [p.title, p.id, p.description ?? p.title, "kestrel otter lynx fuzz page"]) {
             check(`search(${query})`, await s.search({ query }));

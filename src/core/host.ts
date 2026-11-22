@@ -11,6 +11,8 @@
  * 2: pro's commands behind ProCommands, and the names they use (pro-split step 2).
  * 3: buildNewPage, NEW_PAGE_PREFIX and slugify: promote builds its page with core's builder,
  *    which draft_page shares.
+ * 4: KnowledgeService.read leaves out a page's text when the page isn't citable, unless
+ *    include_stale.
  */
 import type { AuditActor, AuditLog, AuditSink } from "./audit-log.js";
 import type { Config } from "./config.js";
@@ -19,7 +21,7 @@ import type { MirrorPage } from "./mirror-view.js";
 import type { Repo } from "./repo.js";
 import type { PageType } from "./schema.js";
 
-export const HOST_API = 3;
+export const HOST_API = 4;
 
 export { canSee, type Identity, visiblePages } from "./acl.js";
 export { type AuditActor, type AuditEvent, type AuditLog, type AuditSink, actorOf, resolveAuditDir, writeAll } from "./audit-log.js";

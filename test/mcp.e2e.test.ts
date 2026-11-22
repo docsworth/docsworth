@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WITHHELD_NOTE } from "../src/core/mcp/text.js";
 import { FakeGitHub } from "./fake-github.js";
 import { acmeOnGitHub, copyAcme } from "./helpers.js";
 import { ALL_SPACES, ENG_PAGE, SEC_PAGE, serveMirror, writeMirror } from "./mirror-helpers.js";
@@ -61,6 +62,8 @@ describe("docsworth mcp (local-only repo)", () => {
     const r = await s.client.getPrompt({ name: "polish", arguments: { id: "rb-deploy-prod" } });
     const text = (r.messages[0]?.content as { text: string }).text;
     expect(text).toMatch(/Call `read` with id `rb-deploy-prod`/);
+    // A person asked for the polish, and a page past its review date can still be polished.
+    expect(text).toMatch(/Call `read` with id `rb-deploy-prod` and `include_stale: true`/);
     expect(text).toMatch(/Call `propose_edit` with id `rb-deploy-prod`, `polish: true`/);
     const { tools } = await s.client.listTools();
     const schema = tools.find((t) => t.name === "propose_edit")?.inputSchema as { properties: Record<string, { type: string }> };
@@ -75,6 +78,8 @@ describe("docsworth mcp (local-only repo)", () => {
     expect(s.client.getInstructions()).toMatch(/Being allowed to cite a page is not a reason to cite it/);
     // A decline cites nothing: all 8 wrong v2 runs on the training gate set cited the nearest page (bench round v3).
     expect(s.client.getInstructions()).toMatch(/Answer each part of the question from the citable pages that support it\. If no citable page answers a part, say so and cite nothing for that part\. A page that is only near the topic is not a source: you may point to it by title, but do not cite it or rely on its content\./);
+    // A page `read` leaves the text out of is reported like search's `excluded` (bench round 2).
+    expect(s.client.getInstructions()).toMatch(/When `search` lists `excluded` pages, or `read` returns a page without its `content`, mention that they were excluded and which team owns them instead of citing them\./);
   });
 
   it("search: gate applied, structured JSON in both content and structuredContent", async () => {
@@ -85,13 +90,31 @@ describe("docsworth mcp (local-only repo)", () => {
     expect(r.data.results.every((x: { citable: boolean }) => x.citable)).toBe(true);
   });
 
-  it("read: page text only in `content`, metadata alongside", async () => {
+  it("read: a gated page's owner and reason without its text, by default", async () => {
     const r = await s.call("read", { id: "rb-scale-cluster" });
+    expect(r.isError).toBe(false);
+    expect(JSON.parse(r.text)).toEqual(r.data);
+    expect(r.data).toMatchObject({ id: "rb-scale-cluster", owner_team: "platform", citable: false, flags: ["past_sla"], gate_reason: "past review date (due 2026-10-30), owned by platform", note: WITHHELD_NOTE });
+    expect(Object.keys(r.data)).not.toContain("content");
+    expect(r.text).not.toMatch(/autoscaler/);
+  });
+
+  it("read with include_stale: page text only in `content`, metadata alongside", async () => {
+    const r = await s.call("read", { id: "rb-scale-cluster", include_stale: true });
     expect(Object.keys(r.data)).toEqual(expect.arrayContaining(["id", "owner_team", "due", "flags", "content"]));
     expect(r.data.flags).toEqual(["past_sla"]);
     const { content, ...meta } = r.data;
     expect(content).toMatch(/autoscaler/);
     expect(JSON.stringify(meta)).not.toMatch(/autoscaler/);
+  });
+
+  it("read takes include_stale, for updating a page, and says what it leaves out without it", async () => {
+    const { tools } = await s.client.listTools();
+    const read = tools.find((t) => t.name === "read")!;
+    const props = (read.inputSchema as { properties: Record<string, { type: string; description?: string }> }).properties;
+    expect(props.include_stale?.type).toBe("boolean");
+    expect(props.include_stale?.description).toMatch(/Only to update the page \(polish, propose_edit, verify\); never answer from it/);
+    expect(read.description).toMatch(/comes back without `content`/);
   });
 
   it("list and stale", async () => {

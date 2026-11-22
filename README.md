@@ -5,8 +5,9 @@
 Docsworth is a git-native knowledge layer for coding agents. Pages are markdown in your
 own repo. Every page has exactly one owning team in CODEOWNERS and a review date. Agents
 reach the pages through an MCP server that cites only pages a team has verified within
-their review window. Everything else comes back as *excluded: past review date, owned by
-platform*, so the gap is visible rather than silently stale.
+their review window. Everything else comes back from `search` and `read` without its text,
+as *excluded: past review date, owned by platform*, unless an agent asks for it to update the
+page. So the gap is visible rather than silently stale.
 
 - **Customer-owned git.** Plain markdown in your GitHub repo; no lock-in, and it reviews
   like code.
@@ -252,9 +253,10 @@ See [AGENTS.md](AGENTS.md), and [docs/releasing.md](docs/releasing.md) for relea
 
 ## Status
 
-v0.3. What's in it, and what hasn't been verified against the real thing yet, is in the
+v0.4. What's in it, and what hasn't been verified against the real thing yet, is in the
 release notes for [0.3.0](docs/release-notes/v0.3.0.md), [0.3.1](docs/release-notes/v0.3.1.md),
-[0.3.2](docs/release-notes/v0.3.2.md) and [0.3.3](docs/release-notes/v0.3.3.md).
+[0.3.2](docs/release-notes/v0.3.2.md), [0.3.3](docs/release-notes/v0.3.3.md) and
+[0.4.0](docs/release-notes/v0.4.0.md).
 
 ## License
 

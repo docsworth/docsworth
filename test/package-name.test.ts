@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { InitError, initRepo } from "../src/core/init.js";
-import { ownedPackage, PUBLISHED_PACKAGE } from "../src/core/version.js";
+import { ownedPackage, PACKAGE_NAME, PACKAGE_VERSION, PUBLISHED_PACKAGE } from "../src/core/version.js";
+import { launcherPackage } from "../scripts/release-guard.js";
 import { NOW } from "./helpers.js";
 
 // Another publisher owns `agent-kb` (and `akb`), our old names, on npm, and nobody owns the
@@ -23,10 +24,11 @@ const fresh = () => {
 };
 
 describe("only our package is ever fetched", () => {
-  it("the launcher and the CLI agree on the published package", () => {
-    const m = /^const PUBLISHED_PACKAGE = (.+);$/m.exec(readFileSync(LAUNCHER, "utf8"));
-    expect(m, "launcher declares PUBLISHED_PACKAGE").not.toBeNull();
-    expect(JSON.parse(m![1]!)).toBe(PUBLISHED_PACKAGE);
+  // Anthropic's plugin directory refuses a launcher that runs a version range, and a range
+  // would let a later publish reach every user before the plugin that names it is reviewed.
+  // `docsworth init --ci` keeps PUBLISHED_PACKAGE's range: a customer's CI takes patches.
+  it("the launcher runs exactly this release of our package, not a range", () => {
+    expect(launcherPackage(readFileSync(LAUNCHER, "utf8"))).toBe(`${PACKAGE_NAME}@${PACKAGE_VERSION}`);
   });
 
   it("never accepts a name another publisher owns, scoped forms aside", () => {
@@ -53,14 +55,14 @@ describe("only our package is ever fetched", () => {
   });
 
   it("is @docsworth/cli, in the range of this version", () => {
-    expect(PUBLISHED_PACKAGE).toBe("@docsworth/cli@^0.3");
+    expect(PUBLISHED_PACKAGE).toBe("@docsworth/cli@^0.4");
   });
 
   it("docsworth init --ci runs the published package unless told another", () => {
     const root = fresh();
     initRepo(root, { org: "acme", team: "platform", ci: true, now: NOW });
     const wf = readFileSync(join(root, ".github/workflows/knowledge.yml"), "utf8");
-    expect(wf.match(/npx -y \S+/g)).toEqual(Array(1).fill('npx -y "@docsworth/cli@^0.3"'));
+    expect(wf.match(/npx -y \S+/g)).toEqual(Array(1).fill('npx -y "@docsworth/cli@^0.4"'));
   });
 
   it("docsworth init --ci refuses a package we don't own, before writing anything", () => {
@@ -102,7 +104,7 @@ describe("only our package is ever fetched", () => {
       const kb = join(realpathSync(fresh()), "R&D kb");
       mkdirSync(kb);
       const r = launch({ ...env, DOCSWORTH_KNOWLEDGE_DIR: kb });
-      expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 0, stdout: `npx -y @docsworth/cli@^0.3 mcp|${home}|${kb}\n` });
+      expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 0, stdout: `npx -y ${PACKAGE_NAME}@${PACKAGE_VERSION} mcp|${home}|${kb}\n` });
     });
 
     it("reads the repo as a path from where it runs, a leading ~ as home, and defaults to the project", () => {
@@ -123,7 +125,7 @@ describe("only our package is ever fetched", () => {
       mkdirSync(kb);
       const asWindows = (more: Record<string, string>) => launch({ ...env, comspec: "cmd", DOCSWORTH_KNOWLEDGE_DIR: kb, ...more }, undefined, win);
       const npx = asWindows({});
-      expect({ status: npx.status, stdout: npx.stdout }).toEqual({ status: 0, stdout: '/d\n/s\n/c\n""npx" "-y" "@docsworth/cli@^0.3" "mcp""\n' });
+      expect({ status: npx.status, stdout: npx.stdout }).toEqual({ status: 0, stdout: `/d\n/s\n/c\n""npx" "-y" "${PACKAGE_NAME}@${PACKAGE_VERSION}" "mcp""\n` });
       const bin = asWindows({ DOCSWORTH_BIN: "C:\\Program Files\\docsworth\\docsworth.cmd" });
       expect(bin.stdout).toBe('/d\n/s\n/c\n""C:\\Program Files\\docsworth\\docsworth.cmd" "mcp""\n');
       for (const odd of ["C:\\Tools\\%SDK%\\docsworth.cmd", "C:\\Tools\\!stable!\\docsworth.cmd", 'C:\\Tools\\docsworth.cmd" & calc & "', "C:\\missing\r\ncalc.exe\r\nrem "]) {

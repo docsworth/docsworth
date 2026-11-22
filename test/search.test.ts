@@ -1,6 +1,11 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { Identity } from "../src/core/acl.js";
+import { canSee, type Identity } from "../src/core/acl.js";
+import { pageStatus } from "../src/core/gate.js";
 import { LOCAL_IDENTITY } from "../src/core/identity.js";
+import { WITHHELD_NOTE } from "../src/core/mcp/text.js";
+import { loadRepo } from "../src/core/repo.js";
 import { KnowledgeService } from "../src/core/service.js";
 import { copyAcme, fixedIdentity, INDEX, makeRepo, NOW, page } from "./helpers.js";
 
@@ -95,16 +100,31 @@ describe("search and read: link redaction", () => {
 });
 
 describe("read", () => {
-  it("flags a page past its SLA but still returns it", async () => {
+  it("flags a page past its SLA and leaves out its text, naming the owner", async () => {
     const page = await service().read({ id: "rb-scale-cluster" });
+    expect(page).toMatchObject({ citable: false, owner_team: "platform", flags: ["past_sla"], gate_reason: "past review date (due 2026-10-30), owned by platform", note: WITHHELD_NOTE });
+    expect("content" in page).toBe(false);
+    expect(JSON.stringify(page)).not.toMatch(/autoscaler/);
+  });
+
+  it("returns a gated page's text, still labelled, only with include_stale", async () => {
+    const page = await service().read({ id: "rb-scale-cluster", include_stale: true });
     expect(page).toMatchObject({ citable: false, flags: ["past_sla"], gate_reason: "past review date (due 2026-10-30), owned by platform" });
     expect(page.content).toMatch(/cluster autoscaler/);
+    expect("note" in page).toBe(false);
+  });
+
+  it("returns a citable page's text with or without include_stale", async () => {
+    const plain = await service().read({ id: "rb-deploy-prod" });
+    expect(plain.content).toMatch(/^# Deploy to production/);
+    expect(await service().read({ id: "rb-deploy-prod", include_stale: true })).toEqual(plain);
+    expect("note" in plain).toBe(false);
   });
 
   it("returns metadata and content as separate fields", async () => {
     const page = await service().read({ id: "rb-deploy-prod" });
     expect(page).toMatchObject({ id: "rb-deploy-prod", owner_team: "platform", due: "2027-01-13", sla_state: "fresh", flags: [], supersedes: ["rb-deploy-legacy"] });
-    expect(page.content.startsWith("# Deploy to production")).toBe(true);
+    expect(page.content?.startsWith("# Deploy to production")).toBe(true);
   });
 
   it("gives identical errors for unknown and hidden ids", async () => {
@@ -112,6 +132,45 @@ describe("read", () => {
     const hidden = await service().read({ id: "rb-rotate-db-creds" }).catch((e: Error) => e.message);
     expect(unknown).toBe("no page with id `no-such-page`");
     expect(hidden).toBe("no page with id `rb-rotate-db-creds`");
+  });
+});
+
+describe("read: no gate hands an agent the page's text by default", () => {
+  // Every kind of gate a page can load with: acme's overdue, deprecated and draft pages, and an
+  // unowned one made here (its owner_team isn't the team CODEOWNERS gives the file). "Never
+  // verified" can't be built: a page without a valid last_verified doesn't load (schema.ts).
+  const copy = copyAcme();
+  afterAll(copy.cleanup);
+  const flush = join(copy.root, "knowledge/runbooks/flush-cdn-cache.md");
+  writeFileSync(flush, readFileSync(flush, "utf8").replace(/^owner_team: platform$/m, "owner_team: devex"));
+  const repo = loadRepo(copy.root);
+  const gated = repo.pages.filter((p) => canSee(p, LOCAL_IDENTITY) && !pageStatus(p, repo, NOW).citable);
+  const s = new KnowledgeService(copy.root, fixedIdentity(LOCAL_IDENTITY), () => NOW);
+  // The body's lines long enough to name it, headings left out (a title is metadata).
+  const lines = (body: string) => body.split("\n").map((l) => l.trim()).filter((l) => l.length >= 20 && !l.startsWith("#"));
+
+  it("covers each gate", () => {
+    expect(gated.map((p) => [p.id, pageStatus(p, repo, NOW).gate_reason])).toEqual([
+      ["onb-on-call", "past review date (due 2026-05-30), owned by devex"],
+      ["rb-deploy-legacy", "status is deprecated"],
+      ["rb-flush-cdn", "ownership unresolved: owner_team is `devex` but CODEOWNERS assigns @acme/platform"],
+      ["rb-payments-chargeback", "status is draft"],
+      ["rb-scale-cluster", "past review date (due 2026-10-30), owned by platform"],
+    ]);
+  });
+
+  it("leaves out each one's text, with its owner, reason and the note", async () => {
+    for (const p of gated) {
+      const r = await s.read({ id: p.id });
+      expect("content" in r, p.id).toBe(false);
+      expect(r, p.id).toMatchObject({ id: p.id, citable: false, owner_team: p.owner_team, gate_reason: pageStatus(p, repo, NOW).gate_reason, note: WITHHELD_NOTE });
+      const json = JSON.stringify(r);
+      expect(lines(p.body).length, p.id).toBeGreaterThan(0);
+      for (const line of lines(p.body)) expect(json, `${p.id}: ${line}`).not.toContain(JSON.stringify(line).slice(1, -1));
+      // The same check finds the text when it is returned, so it can fail.
+      const full = JSON.stringify(await s.read({ id: p.id, include_stale: true }));
+      for (const line of lines(p.body)) expect(full, `${p.id}: ${line}`).toContain(JSON.stringify(line).slice(1, -1));
+    }
   });
 });
 

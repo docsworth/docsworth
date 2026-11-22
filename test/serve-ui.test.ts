@@ -76,6 +76,24 @@ describe("ui tools: the HTTP surface and its policy (R4)", () => {
     expect((await stdio.listTools()).tools.map((t) => t.name).sort()).toEqual(STDIO_TOOLS);
   });
 
+  it("ui_page shows a page that isn't citable with its text, labelled, where read leaves it out", async () => {
+    const acme = copyAcme();
+    cleanups.push(acme.cleanup);
+    // `include_stale: denied` is about agents' `read`; the web app's page view isn't covered by
+    // it (docs/security-model.md says so).
+    const cfg = join(acme.root, ".knowledge/config.yaml");
+    writeFileSync(cfg, `${readFileSync(cfg, "utf8")}policy:\n  include_stale: denied\n`);
+    const { s } = await serveAt(acme.root, { identity: fixedIdentity(LOCAL_IDENTITY), who: LOCAL_IDENTITY });
+    const { call } = await httpClient(s.port);
+    const page = await call("ui_page", { id: "rb-scale-cluster" });
+    expect(page.data).toMatchObject({ citable: false, flags: ["past_sla"], gate_reason: "past review date (due 2026-10-30), owned by platform" });
+    expect(page.data.content).toMatch(/cluster autoscaler/);
+    expect(page.data).not.toHaveProperty("note");
+    const read = await call("read", { id: "rb-scale-cluster", include_stale: true });
+    expect(read.isError).toBe(false);
+    expect(read.data).not.toHaveProperty("content");
+  });
+
   it("drop out with `list` when the policy refuses it, at startup and after a live change", async () => {
     const acme = copyAcme();
     cleanups.push(acme.cleanup);
@@ -310,8 +328,9 @@ describe("ui tools: hidden pages don't show, and don't change what is shown (R6)
     for (const p of hidden) for (const needle of [p.id, p.title, p.path]) expect(text, `${p.id}: ${needle}`).not.toContain(needle);
     const service = new KnowledgeService(acme.root, fixedIdentity(who), () => NOW);
     for (const n of (await service.uiGraph()).nodes) {
-      const read = await service.read({ id: n.id });
-      expect(n.has_restricted_links, n.id).toBe(read.content.includes("[restricted page]"));
+      // With include_stale: the graph covers every visible page, and only the full text shows each placeholder.
+      const read = await service.read({ id: n.id, include_stale: true });
+      expect(n.has_restricted_links, n.id).toBe(read.content!.includes("[restricted page]"));
     }
   });
 

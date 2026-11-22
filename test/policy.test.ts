@@ -1,15 +1,16 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../src/core/acl.js";
 import { ConfigError, loadConfig } from "../src/core/config.js";
 import { GitHubClient } from "../src/core/github.js";
 import { IdentityProvider, LOCAL_IDENTITY } from "../src/core/identity.js";
 import { lintRepo } from "../src/core/lint.js";
 import { createMcpServer, REQUIRES_USER_INTERACTION } from "../src/core/mcp/server.js";
+import { WITHHELD_BY_POLICY_NOTE, WITHHELD_NOTE } from "../src/core/mcp/text.js";
 import { loadRepo } from "../src/core/repo.js";
 import { KnowledgeService, ToolError } from "../src/core/service.js";
 import { FakeGitHub } from "./fake-github.js";
@@ -192,6 +193,38 @@ describe("include_stale: denied", () => {
     const r = await denied.search(q);
     expect(r.results.map((x) => x.id)).not.toContain("rb-scale-cluster");
     expect(r.excluded.map((x) => x.id)).toContain("rb-scale-cluster");
+  });
+
+  it("keeps a gated page's text out of read too, even when the agent asks, and says it's the policy", async () => {
+    const allowed = new KnowledgeService(acmeWithPolicy("include_stale: allowed"), fixedIdentity(LOCAL_IDENTITY), () => NOW);
+    const denied = new KnowledgeService(acmeWithPolicy("include_stale: denied"), fixedIdentity(LOCAL_IDENTITY), () => NOW);
+    expect((await allowed.read({ id: "rb-scale-cluster", include_stale: true })).content).toMatch(/cluster autoscaler/);
+    const r = await denied.read({ id: "rb-scale-cluster", include_stale: true });
+    expect("content" in r).toBe(false);
+    expect(r).toMatchObject({ citable: false, owner_team: "platform", gate_reason: "past review date (due 2026-10-30), owned by platform", note: WITHHELD_BY_POLICY_NOTE });
+    // Without the opt-in it is the ordinary note: the policy changed nothing the agent asked for.
+    expect(await denied.read({ id: "rb-scale-cluster" })).toHaveProperty("note", WITHHELD_NOTE);
+    // A citable page is read as ever.
+    expect((await denied.read({ id: "rb-deploy-prod", include_stale: true })).content).toMatch(/^# Deploy to production/);
+  });
+
+  it("applies a policy that changed while the caller's identity was being resolved", async () => {
+    const root = acmeWithPolicy("include_stale: allowed");
+    let resolve!: () => void;
+    const pending = new Promise<void>((r) => (resolve = r));
+    let waiting = false;
+    const slow = { get: async () => ((waiting = true), await pending, LOCAL_IDENTITY), fresh: async () => LOCAL_IDENTITY, github: null };
+    const service = new KnowledgeService(root, slow, () => NOW);
+    const read = service.read({ id: "rb-scale-cluster", include_stale: true });
+    await vi.waitFor(() => expect(waiting).toBe(true));
+    const cfg = join(root, ".knowledge/config.yaml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace("include_stale: allowed", "include_stale: denied"));
+    const later = new Date(Date.now() + 5000);
+    utimesSync(cfg, later, later); // a new mtime, however coarse the clock
+    resolve();
+    const r = await read;
+    expect("content" in r).toBe(false);
+    expect(r).toHaveProperty("note", WITHHELD_BY_POLICY_NOTE);
   });
 });
 

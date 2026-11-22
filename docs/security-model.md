@@ -52,7 +52,10 @@ The admin role is real only when three things hold. Lint can see none of them, s
 - **Per-tool allowlists:** checked on every call before any page is resolved, so a refused `read` says the same thing for every id. A refused tool also drops out of that identity's `tools/list`. An identity with no teams (local mode) is refused any allowlisted tool.
 - **When the tool list is computed:** at session start, after every call, and every 15 seconds. The timer matters because a disabled tool's calls never reach a handler. The config is re-read when it changes, so a tool the policy now refuses is disabled, one it now allows is enabled (the approval flag follows too), and the client is sent `list_changed`. Every call is also checked against the current policy.
 - **`writes: disabled`:** disables the write tools, so they leave `tools/list`. A call is refused before GitHub is asked anything.
-- **`include_stale: denied`:** keeps gated pages out of search results.
+- **`include_stale: denied`:** keeps gated pages out of search results, and their text out of `read`, even when the agent asks with `include_stale`.
+- **What `include_stale` doesn't cover:**
+  - **`ui_page`, the web app's page view on `docsworth serve`'s HTTP sessions:** returns any visible page's text, gated or not, for a person fixing it. Any MCP client holding the serve token can call it: it's a tool, not a boundary only the app can cross, and `include_stale: denied` doesn't reach it.
+  - **A mirrored page (`mirror:` id):** always read with its text, as labelled context.
 - **`require_human_approval`:** sets `anthropic/requiresUserInteraction` on the write tools, so Claude Code asks on every call in every permission mode.
   - That is client behaviour and defence in depth.
   - The controls are PR-only writes, CODEOWNERS and branch protection.

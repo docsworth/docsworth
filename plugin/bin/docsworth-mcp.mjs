@@ -8,10 +8,13 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
-// The npm package to run. `agent-kb` on npm belongs to another publisher and nobody owns the
-// bare `docsworth`: never fall back to either. Kept equal to PUBLISHED_PACKAGE in
-// src/core/version.ts by test/package-name.test.ts.
-const PUBLISHED_PACKAGE = "@docsworth/cli@^0.3";
+// The npm package to run, at exactly this release's version: a range would let a later
+// publish reach every user before the plugin that names it is reviewed, and Anthropic's
+// plugin directory refuses one. `agent-kb` on npm belongs to another publisher and nobody
+// owns the bare `docsworth`: never fall back to either. test/package-name.test.ts keeps it
+// equal to PACKAGE_NAME@PACKAGE_VERSION in src/core/version.ts, and the release guard
+// refuses a release where it isn't.
+const PLUGIN_PACKAGE = "@docsworth/cli@0.4.0";
 
 // The repo reaches the server in the environment, never on the command line, which Windows
 // runs through cmd.exe: a path would split at a space there, and what follows an `&` would
@@ -24,10 +27,10 @@ const env = { ...process.env, DOCSWORTH_KNOWLEDGE_DIR: dir };
 // serves by default.
 const [cmd, args, cwd] = process.env.DOCSWORTH_BIN
   ? [process.env.DOCSWORTH_BIN, ["mcp"], dir]
-  : ["npx", ["-y", PUBLISHED_PACKAGE, "mcp"], homedir()];
+  : ["npx", ["-y", PLUGIN_PACKAGE, "mcp"], homedir()];
 
-// Windows starts npx, and npm's .cmd shims, only through cmd.exe: each word is quoted, so the
-// `^` of the range and a space in DOCSWORTH_BIN arrive as they are. Quotes don't stop cmd.exe
+// Windows starts npx, and npm's .cmd shims, only through cmd.exe: each word is quoted, so a
+// space in DOCSWORTH_BIN arrives as it is. Quotes don't stop cmd.exe
 // expanding %VAR% (or !VAR!), and a quote or a line break would end the word, so a
 // DOCSWORTH_BIN with any of them is refused, not misread. No Windows path has them but %, !.
 const windows = process.platform === "win32";
