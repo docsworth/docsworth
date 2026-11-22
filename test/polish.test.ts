@@ -552,6 +552,11 @@ const texts = [
   { id: "fixture:rb-z", text: FORMS_PAGE },
 ];
 const bodyStart = (t: string) => t.indexOf("\n---", 3) + 4;
+/** `read`'s text, which a citable page always comes with. */
+const textOf = (r: { content?: string }): string => {
+  if (typeof r.content !== "string") throw new Error("read left the page's text out");
+  return r.content;
+};
 const inBody = (t: string, re: RegExp, f: (m: RegExpExecArray) => string): string | undefined => {
   const start = bodyStart(t);
   re.lastIndex = 0;
@@ -664,7 +669,7 @@ describe("propose_edit with polish: true", () => {
 
   it("takes the body as `read` returns it, and keeps the frontmatter byte for byte", async () => {
     const s = service();
-    const { content } = await s.read({ id: "rb-deploy-prod" });
+    const content = textOf(await s.read({ id: "rb-deploy-prod" }));
     const polished = content.replace("canary\n([ADR-0002]", "canary ([ADR-0002]");
     const r = await s.proposeEdit({ id: "rb-deploy-prod", body: polished, reason: "Rewrapped the intro.", polish: true });
     const current = gh.file(DEPLOY)!;
@@ -675,7 +680,7 @@ describe("propose_edit with polish: true", () => {
 
   it("on a page with links the caller can't see, refuses a whole body or file, placeholder or not", async () => {
     const s = service();
-    const { content } = await s.read({ id: "index" });
+    const content = textOf(await s.read({ id: "index" }));
     expect(content).toContain("[restricted page]");
     const file = gh.file("knowledge/index.md")!;
     for (const args of [
@@ -727,7 +732,7 @@ describe("propose_edit with polish: true", () => {
     writeFileSync(path, readFileSync(path, "utf8").replace("## Checks", `Keys: [rotation](${SEC_PAGE.url}).\n\n## Checks`));
     gh = new FakeGitHub("acme/knowledge", "acme", { alice: { login: "alice", teams: ["platform"], push: true } }, repo.root);
     const s = service();
-    const { content } = await s.read({ id: "rb-deploy-prod" });
+    const content = textOf(await s.read({ id: "rb-deploy-prod" }));
     expect(content).toContain("Keys: [restricted page].");
     const err = await s.proposeEdit({ id: "rb-deploy-prod", body: content.replace("Production deploys", "All production deploys"), reason: "r", polish: true }).catch((e) => e);
     expect(err).toMatchObject({ code: "invalid", message: expect.stringMatching(/^this page links to pages you can't see/) });

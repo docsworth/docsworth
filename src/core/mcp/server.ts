@@ -112,7 +112,13 @@ export function createMcpServer(
     {
       title: "Read a page",
       description: readDescription(service.mirrorServed()),
-      inputSchema: { id: idArg },
+      inputSchema: {
+        id: idArg,
+        include_stale: z
+          .boolean()
+          .optional()
+          .describe("Also return the text of a page that isn't citable, labelled with `flags` and `gate_reason`. Only to update the page (polish, propose_edit, verify); never answer from it"),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     (args) => after(run(() => service.read(args))),

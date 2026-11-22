@@ -138,7 +138,7 @@ export const ConfigSchema = z.object({
       writes: z.enum(["enabled", "disabled"]).default("enabled"),
       /** Mark write tools so Claude Code asks a human on every call (defence in depth). */
       require_human_approval: z.boolean().default(false),
-      /** `denied`: search never returns gated pages inline, even with include_stale. */
+      /** `denied`: search and read never return a gated page's text, even with include_stale. */
       include_stale: z.enum(["allowed", "denied"]).default("allowed"),
       /** How long team membership is cached for reads: the deprovisioning window. */
       identity_cache_seconds: z.number().int().min(30).max(3600).default(300),

@@ -1,16 +1,17 @@
 /** Format version of the knowledge repo contract in docs/format-spec.md. */
 export const FORMAT_VERSION = 1;
-export const PACKAGE_VERSION = "0.3.3";
+export const PACKAGE_VERSION = "0.4.0";
 
 /**
  * The npm package Docsworth is published as, with its version range: what `docsworth init
- * --ci` writes into a workflow, and what the plugin launcher runs without DOCSWORTH_BIN.
+ * --ci` writes into a workflow. The plugin launcher runs exactly PACKAGE_NAME@PACKAGE_VERSION
+ * instead (its PLUGIN_PACKAGE), since a plugin directory refuses a range.
  * The `@docsworth` scope is ours on npm (the org `docsworth`). Another publisher owns
  * `agent-kb` (and `akb`), our old names, and nobody owns the bare `docsworth`, so nothing
- * may fetch any of those. PUBLISHED_PACKAGE in plugin/bin/docsworth-mcp.mjs is kept equal
- * by a test, and scripts/release-guard.ts refuses a release outside its range.
+ * may fetch any of those. scripts/release-guard.ts refuses a release outside its range, or
+ * one whose launcher runs any other version.
  */
-export const PUBLISHED_PACKAGE = "@docsworth/cli@^0.3";
+export const PUBLISHED_PACKAGE = "@docsworth/cli@^0.4";
 
 /** The one package we publish (release checklist, decision 1): a release of any other name is refused. */
 export const PACKAGE_NAME = "@docsworth/cli";

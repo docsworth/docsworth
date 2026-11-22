@@ -64,7 +64,15 @@ export const TOOLS: readonly ToolSpec[] = [
     // Mirrored pages were shown too (as context), so they count as returned.
     returned: (sc) => ({ returned: [...ids(sc.results), ...ids(sc.mirrored)], excluded: ids(sc.excluded) }),
   },
-  { name: "read", surface: "all", write: false, policy: "read", auditFields: ["id"], returned: (sc) => ({ returned: [String(sc.id)] }) },
+  // A page whose text `read` left out was shown by owner and reason only: excluded, as in search.
+  {
+    name: "read",
+    surface: "all",
+    write: false,
+    policy: "read",
+    auditFields: ["id", "include_stale"],
+    returned: (sc) => (typeof sc.content === "string" ? { returned: [String(sc.id)] } : { excluded: [String(sc.id)] }),
+  },
   {
     name: "list",
     surface: "all",

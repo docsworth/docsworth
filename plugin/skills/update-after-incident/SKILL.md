@@ -21,7 +21,8 @@ From the postmortem or notes the user gave you, list:
 ## 2. Find the affected pages
 
 Use the Docsworth `search` tool with the symptoms, then with each service name, passing
-`include_stale: true`. `read` every candidate. A page is affected when the incident
+`include_stale: true`. `read` every candidate with `include_stale: true` too: you're here
+to fix pages, and without it `read` leaves out the text of a page that isn't citable. A page is affected when the incident
 showed that one of these is wrong or missing:
 
 - a step

@@ -9,9 +9,10 @@ to a GitHub release.
 1. Bump the version in `package.json` (and the lockfile), `PACKAGE_VERSION` in
    `src/core/version.ts`, `plugin/.claude-plugin/plugin.json` and
    `.claude-plugin/marketplace.json`, and in `server.json` its own `version` and its npm
-   package's. If the version leaves the range in
-   `PUBLISHED_PACKAGE` (`src/core/version.ts` and `plugin/bin/docsworth-mcp.mjs`, which a
-   test keeps equal), move the range too: the plugin and `docsworth init --ci` fetch it.
+   package's. Bump `PLUGIN_PACKAGE` in `plugin/bin/docsworth-mcp.mjs` too: the plugin runs
+   exactly this version, since Anthropic's plugin directory refuses a range. If the version
+   leaves the range in `PUBLISHED_PACKAGE` (`src/core/version.ts`), move the range too:
+   `docsworth init --ci` fetches it.
 2. Write the release notes, `docs/release-notes/v<version>.md`.
 3. Run the guard. It prints `v<version> can be released as …`, or a `REFUSED` line for
    each disagreement:
@@ -20,7 +21,9 @@ to a GitHub release.
    npx tsx scripts/release-guard.ts v<version>
    ```
 
-4. Merge to `main`, then push the tag.
+4. Merge to `main`, then push the tag, and approve the publish straight away. Until npm
+   serves the version, a plugin installed from this repository's marketplace and updated
+   from `main` can't start its server: it runs exactly the version `main` names.
 
 ## What the workflow checks
 

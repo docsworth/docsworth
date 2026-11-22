@@ -118,7 +118,11 @@ The gate is fixed by this spec; configuration cannot widen it.
   listed separately as `excluded`, each with a reason such as "past review date (due
   2026-10-30), owned by platform". Agents can then say what was excluded instead of
   silently missing it.
-- **`read`:** returns any visible page, with `citable`, `flags` and `gate_reason`.
+- **`read`:** returns any visible page's metadata, with `citable`, `flags` and
+  `gate_reason`, and its text in `content`. A page that isn't citable comes back without
+  `content`, with a `note` saying its text was left out and to name the owning team
+  instead, unless the agent passes `include_stale: true`, which is for updating the page.
+  `policy.include_stale: denied` leaves the text out even then.
 
 ## ACL
 
@@ -278,7 +282,7 @@ on the benchmark it was neutral on answer questions but just missed its bar on g
 questions). The MCP server then lists
 matching mirrored pages in search under `mirrored`, at most 3, apart from `results`, each
 with `citable: false`, its source URL and last edit. `read` takes a `mirror:` id and
-returns the page with `citable: false` and `flags: ["mirrored"]`. Filters on page type
+returns the page, its text included as context, with `citable: false` and `flags: ["mirrored"]`. Filters on page type
 or `applies_to` leave mirrored pages out; `owner_team` applies to them.
 
 - **Audience:** each space's `acl`, by the same rule as pages. A hidden and an unknown
@@ -327,7 +331,7 @@ policy:                     # org policy; every default keeps v0.1 behaviour
     propose_edit: { teams: [platform, payments] }
   writes: enabled           # disabled: propose_edit, verify and draft_page are not offered
   require_human_approval: false   # true: Claude Code asks on every write call
-  include_stale: allowed    # denied: search never returns gated pages inline
+  include_stale: allowed    # denied: search and read never return a gated page's text
   identity_cache_seconds: 300     # team-membership cache for reads (30-3600)
 audit_http:                 # pro: ship each event to a collector (SIEM) as it happens
   url_env: DOCSWORTH_AUDIT_URL    # env var with the https:// URL (http only on loopback)

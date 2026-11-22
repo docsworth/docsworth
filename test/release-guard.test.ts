@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { inRange, type ReleaseState, releaseProblems, tarballProblems } from "../scripts/release-guard.js";
+import { inRange, launcherPackage, type ReleaseState, releaseProblems, tarballProblems } from "../scripts/release-guard.js";
 
 // The release workflow publishes only what passes this: the tag, every version and the
 // published package name agree, and the name is ours.
@@ -14,7 +14,7 @@ import { inRange, type ReleaseState, releaseProblems, tarballProblems } from "..
 const spec = (name: string, range: string) => [name, range].join("@");
 const MCP = "io.github.docsworth/docsworth";
 const listing = (version = "0.2.0", identifier = "@docsworth/cli", name = MCP) => ({ name, version, packages: [{ registryType: "npm", identifier, version }] });
-const ok: ReleaseState = { tag: "v0.2.0", name: "@docsworth/cli", version: "0.2.0", codeVersion: "0.2.0", pluginVersion: "0.2.0", published: spec("@docsworth/cli", "^0.2"), notes: true, mcpName: MCP, server: listing() };
+const ok: ReleaseState = { tag: "v0.2.0", name: "@docsworth/cli", version: "0.2.0", codeVersion: "0.2.0", pluginVersion: "0.2.0", published: spec("@docsworth/cli", "^0.2"), launcher: spec("@docsworth/cli", "0.2.0"), notes: true, mcpName: MCP, server: listing() };
 
 describe("release guard", () => {
   it("lets a consistent release through", () => {
@@ -33,6 +33,11 @@ describe("release guard", () => {
     ["a published package that names something else", { published: spec("@docsworth/other", "^0.2") }, /names @docsworth\/other, but package.json is @docsworth\/cli/],
     ["a version outside the published range", { published: spec("@docsworth/cli", "^0.3") }, /isn't in PUBLISHED_PACKAGE's range \^0.3/],
     ["no release notes", { notes: false }, /no release notes at docs\/release-notes\/v0.2.0.md/],
+    // The plugin launcher runs exactly this release: Anthropic's directory refuses a range.
+    ["a launcher that runs a range", { launcher: spec("@docsworth/cli", "^0.2") }, /^the plugin launcher runs @docsworth\/cli@\^0.2, not exactly @docsworth\/cli@0.2.0$/m],
+    ["a launcher behind the package", { launcher: spec("@docsworth/cli", "0.1.0") }, /^the plugin launcher runs @docsworth\/cli@0.1.0, not exactly @docsworth\/cli@0.2.0$/m],
+    ["a launcher that runs another package", { launcher: spec("@docsworth/other", "0.2.0") }, /^the plugin launcher runs @docsworth\/other@0.2.0, not exactly @docsworth\/cli@0.2.0$/m],
+    ["a launcher with no PLUGIN_PACKAGE", { launcher: null }, /^the plugin launcher \(plugin\/bin\/docsworth-mcp.mjs\) declares no PLUGIN_PACKAGE$/m],
     ["a prerelease", { tag: "v0.2.0-beta.1", version: "0.2.0-beta.1", codeVersion: "0.2.0-beta.1", pluginVersion: "0.2.0-beta.1", server: listing("0.2.0-beta.1") }, /isn't a plain major.minor.patch version/],
     // The MCP registry listing (server.json): the registry checks that the npm package's
     // mcpName is the listing's name, and installs the version the listing names.
@@ -44,6 +49,14 @@ describe("release guard", () => {
     ["a listing of another package", { server: listing("0.2.0", "@acme/other") }, /^server.json lists no npm package @docsworth\/cli$/m],
   ] as const)("refuses %s", (_what, change, message) => {
     expect(releaseProblems({ ...ok, ...change }).join("\n")).toMatch(message);
+  });
+
+  it("reads the launcher's package from its one declaration, and nothing else", () => {
+    const pin = spec("@docsworth/cli", "1.2.3");
+    expect(launcherPackage(`// runs it\nconst PLUGIN_PACKAGE = "${pin}";\n`)).toBe(pin);
+    // Gone, renamed, or not a plain string: no package, so the guard refuses.
+    for (const source of ["", `const PUBLISHED_PACKAGE = "${pin}";`, `const PLUGIN_PACKAGE = \`${pin}\`;`, `const PLUGIN_PACKAGE = "${pin}"; // and more`, `const PLUGIN_PACKAGE = "${pin}";\nconst PLUGIN_PACKAGE = "${pin}";`])
+      expect(launcherPackage(source), source).toBeNull();
   });
 
   it("checks the packed tarball's own manifest", () => {
@@ -65,7 +78,7 @@ describe("release guard", () => {
       version: string;
       packages: { registryType: string; identifier: string; version: string; transport: { type: string }; packageArguments: { type: string; value: string }[]; environmentVariables: { name: string }[] }[];
     };
-    expect(releaseProblems({ ...ok, tag: `v${pkg.version}`, name: pkg.name, version: pkg.version, codeVersion: pkg.version, pluginVersion: pkg.version, published: spec(pkg.name, `^${pkg.version.split(".").slice(0, 2).join(".")}`), mcpName: pkg.mcpName, server })).toEqual([]);
+    expect(releaseProblems({ ...ok, tag: `v${pkg.version}`, name: pkg.name, version: pkg.version, codeVersion: pkg.version, pluginVersion: pkg.version, published: spec(pkg.name, `^${pkg.version.split(".").slice(0, 2).join(".")}`), launcher: launcherPackage(readFileSync("plugin/bin/docsworth-mcp.mjs", "utf8")), mcpName: pkg.mcpName, server })).toEqual([]);
     expect(server.name).toMatch(/^io\.github\.docsworth\/[a-zA-Z0-9._-]+$/);
     expect(server.description.length).toBeLessThanOrEqual(100);
     const [npm] = server.packages;

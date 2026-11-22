@@ -11,7 +11,8 @@ enforces that, so check membership before doing a long walkthrough.
 
 ## 1. Pick the page
 
-If the user named a page, `read` it. If they named a team, call `stale` with
+If the user named a page, `read` it with `include_stale: true`. The page you're verifying is
+usually past its review date, and without the flag `read` leaves such a page's text out. If they named a team, call `stale` with
 `owner_team` and offer the overdue pages oldest first, then the pages that are due soon.
 Show the page's `owner_team`, `last_verified`, `due` and `flags` before starting.
 

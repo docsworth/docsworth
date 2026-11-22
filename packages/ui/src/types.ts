@@ -63,7 +63,7 @@ export interface MirrorReadResponse {
   content: string;
 }
 
-/** What `read` and `ui_page` return: a repo page or a mirrored one. */
+/** What `ui_page` returns (and `read`, with a page's text): a repo page or a mirrored one. */
 export type AnyPage = ReadResponse | MirrorReadResponse;
 export const isMirror = (p: AnyPage): p is MirrorReadResponse => "source" in p;
 

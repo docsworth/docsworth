@@ -66,8 +66,12 @@ describe("ACL matrix", () => {
     for (const type of ["runbook", "adr", "service", "guide", "policy"] as const) assertNoTrace(await s.list({ type }), hidden, `list(${type})`);
     for (const dir of ["runbooks", "services", "services/payments", "decisions", "onboarding"]) assertNoTrace(await settle(() => s.list({ path: dir })), hidden, `list(${dir})`);
 
-    // Every visible page's content.
-    for (const p of visible) assertNoTrace(await s.read({ id: p.id }), hidden, `read(${p.id})`);
+    // Every visible page's content: with include_stale too, or a page that isn't citable would
+    // show no text, and its redaction would go unchecked.
+    for (const p of visible) {
+      assertNoTrace(await s.read({ id: p.id }), hidden, `read(${p.id})`);
+      assertNoTrace(await s.read({ id: p.id, include_stale: true }), hidden, `read(${p.id}, include_stale)`);
+    }
 
     // Targeted probes at each hidden page, with and without include_stale.
     for (const p of hidden) {
