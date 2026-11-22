@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    The plugin's icon: a page that is also a D, two of whose lines branch off as an agent's
+    circuit, with the AI spark. plugin/.claude-plugin/icon.png is this, rendered at 1024 px
+    (a headless Chrome screenshot of the SVG) and quantized to 256 colours. Anthropic's plugin
+    directory takes the listing icon once, at the first save or submit, so a change here
+    doesn't change a live listing.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#23295e"/>
+      <stop offset="1" stop-color="#0c1029"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd36b"/>
+      <stop offset="1" stop-color="#f29a3a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g transform="translate(-56 46)">
+    <!-- the D-shaped page: straight spine, round back, folded top-left corner -->
+    <path d="M352 212 H520 A300 300 0 0 1 520 812 H232 V332 Z" fill="#f4efe4"/>
+    <path d="M232 332 L352 212 V332 Z" fill="#cfc6b3"/>
+    <!-- lines of text; two of them branch off as an agent's circuit -->
+    <g fill="none" stroke="#3b4a8f" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M300 432 H520"/>
+      <path d="M300 532 H560 L620 472 H660"/>
+      <path d="M300 632 H540 L590 682 H620"/>
+      <path d="M300 732 H460"/>
+    </g>
+    <g fill="#2fb58a">
+      <circle cx="690" cy="472" r="34"/>
+      <circle cx="650" cy="682" r="34"/>
+    </g>
+    <!-- the spark -->
+    <path d="M768 120 C784 210 814 240 904 256 C814 272 784 302 768 392 C752 302 722 272 632 256 C722 240 752 210 768 120 Z" fill="url(#spark)" stroke="#0c1029" stroke-width="20" stroke-linejoin="round"/>
+  </g>
+</svg>
