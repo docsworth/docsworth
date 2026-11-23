@@ -59,7 +59,7 @@ try {
   await client.connect(new StdioClientTransport({ command: server!.command, args, env, stderr: "pipe" }));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
   // Exactly these: a tool the public package shouldn't serve fails it as surely as a missing one.
-  check("the packaged plugin's launcher serves the seven tools, and only them", tools.join(",") === "draft_page,list,propose_edit,read,search,stale,verify", tools.join(", "));
+  check("the packaged plugin's launcher serves the eight tools, and only them", tools.join(",") === "check_pr,draft_page,list,propose_edit,read,search,stale,verify", tools.join(", "));
   const prompts = (await client.listPrompts()).prompts.map((p) => p.name).sort();
   check("and the polish prompt, and only it", prompts.join(",") === "polish", prompts.join(", "));
   const search = await client.callTool({ name: "search", arguments: { query: "how do I add a page" } });

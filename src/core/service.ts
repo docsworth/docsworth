@@ -14,16 +14,46 @@ import { MIRRORED_NOTE, NOT_CITABLE_NOTE, WITHHELD_BY_POLICY_NOTE, WITHHELD_NOTE
 import { buildNewPage, NEW_PAGE_PREFIX, type NewPageType, slugify } from "./new-page.js";
 import { type Policy, toolRefusal } from "./policy.js";
 import { WRITE_TOOLS } from "./tool-registry.js";
-import type { GitHubClient } from "./github.js";
+import { BlobTooLargeError, type GitHubClient, GitHubError, type PullDetail } from "./github.js";
 import { EXTERNAL, linkPath, pageLinks } from "./links.js";
-import { extractLinks, loadRepo, type Page, type Repo, resolveLink } from "./repo.js";
+import { extractLinks, isPage, loadRepo, type Page, parsePage, type Repo, resolveLink } from "./repo.js";
 import { ACL_INTERNAL, PAGE_TYPES, type PageType } from "./schema.js";
 import { splitFrontmatter } from "./frontmatter.js";
 import { plainText, SearchIndex, snippet } from "./search.js";
 import { listStale, type StaleEntry } from "./stale.js";
-import { applyEdits, assertProtectedFieldsUnchanged, type Edit, openPagePr, replaceBody, setLastVerified, WriteError } from "./writes.js";
+import { applyEdits, assertProtectedFieldsUnchanged, DOCSWORTH_BRANCH, type Edit, openPagePr, replaceBody, setLastVerified, WriteError } from "./writes.js";
 
 export type ToolErrorCode = "not_found" | "forbidden" | "invalid" | "unavailable";
+
+/** A Docsworth PR touches one page; a few more is someone's push, and still checked file by file. */
+const MAX_PR_FILES = 20;
+/** No page is near this; a head blob past it is refused unread. */
+const MAX_PAGE_BYTES = 1024 * 1024;
+
+/** One page a PR touches, as `check_pr` shows it. */
+export interface PrPage {
+  id: string;
+  title: string;
+  path: string;
+  owner_team: string;
+  change: "added" | "modified";
+  /** The page is on the default branch as loaded here, so id, title and owner came from it, not the head. */
+  on_default: boolean;
+}
+
+export interface CheckPrResult {
+  pr_number: number;
+  pr_url: string;
+  kind: "propose" | "verify" | "draft";
+  state: "open" | "merged" | "closed";
+  draft: boolean;
+  merged_at: string | null;
+  closed_at: string | null;
+  updated_at: string;
+  reviews: { approved: number; changes_requested: number };
+  pages: PrPage[];
+  note: string;
+}
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 
 export class ToolError extends Error {
@@ -859,6 +889,11 @@ export class KnowledgeService {
 
   private async pushContext(who: Identity, gh: GitHubClient, repoSlug: string) {
     if (!who.canWrite) throw new ToolError("forbidden", `your token has no push access to ${repoSlug}`);
+    return this.baseBranch(gh, repoSlug);
+  }
+
+  /** The default branch, resolved once. Needs no push access: check_pr reads it too. */
+  private async baseBranch(gh: GitHubClient, repoSlug: string): Promise<string> {
     this.defaultBranch ??= this.repo.config.github.default_branch ?? (await gh.getRepo(repoSlug)).default_branch;
     return this.defaultBranch;
   }
@@ -1108,5 +1143,128 @@ export class KnowledgeService {
       body: `@${who.login} (@${this.repo.config.github.org}/${page.owner_team}) verified \`${page.id}\` on ${today} via Docsworth \`verify\`.`,
     });
     return { pr_url: pr.url, pr_number: pr.number, branch: pr.branch, last_verified: today };
+  }
+
+  /**
+   * A PR Docsworth opened, as the caller may see it (`check_pr`). Its own files decide which
+   * pages it touches, never its branch name, which anyone with push can choose: each must be
+   * a page the caller can see on the default branch where it's there, and as the head has it.
+   * From the PR on, every refusal is the not_found an unknown number gets, and nothing is
+   * tainted until the answer is ready, so a hidden page's PR can't be told from no PR.
+   */
+  async checkPr(args: { pr_number: number }): Promise<CheckPrResult> {
+    const who = await this.identity.get();
+    this.permit("check_pr", who);
+    const gh = this.identity.github;
+    const repoSlug = this.current().config.github.repo;
+    if (who.mode !== "github" || !gh || !repoSlug) throw new ToolError("unavailable", "check_pr needs github.repo in .knowledge/config.yaml and a GitHub token");
+    const n = args.pr_number;
+    if (!Number.isInteger(n) || n < 1 || n > 1e9) throw new ToolError("invalid", "`pr_number` must be a whole number from 1 to 1000000000");
+    const base = await this.baseBranch(gh, repoSlug);
+    const notFound = () => new ToolError("not_found", `no Docsworth pull request #${n}`);
+
+    let pr: PullDetail;
+    try {
+      pr = await gh.getPull(repoSlug, n);
+    } catch (err) {
+      if (err instanceof GitHubError && err.status === 404) throw notFound();
+      // A token without Pull requests: read gets this for every number, so it says nothing about one.
+      if (err instanceof GitHubError && err.status === 403 && !err.rateLimited && !err.headers?.has("x-github-sso"))
+        throw new ToolError("unavailable", `your token can't read pull requests in ${repoSlug}: grant it Pull requests: read`);
+      throw err;
+    }
+
+    try {
+      return await this.inspectPr(gh, repoSlug, base, pr, who, notFound);
+    } catch (err) {
+      if (err instanceof ToolError) throw err;
+      // Refused past this point (a blob the token can't read, a gitlink's commit, one too
+      // large): the same not_found, or it would answer only for PRs that got this far.
+      if (err instanceof BlobTooLargeError) throw notFound();
+      if (err instanceof GitHubError && err.status >= 400 && err.status < 500 && !err.rateLimited && !err.headers?.has("x-github-sso")) throw notFound();
+      // Anything else gets a fixed message: GitHub's names the API path, and a blob's path is
+      // the hidden page's content hash. A fault here is logged, not shown.
+      if (!(err instanceof GitHubError)) process.stderr.write(`docsworth: check_pr: ${(err as Error)?.stack ?? String(err)}\n`);
+      const wait = err instanceof GitHubError && err.rateLimited && err.retryAfter !== null ? ` (retry in ${err.retryAfter} s)` : "";
+      throw new ToolError("unavailable", `GitHub didn't answer while checking #${n}; try again${wait}`);
+    }
+  }
+
+  private async inspectPr(gh: GitHubClient, repoSlug: string, base: string, pr: PullDetail, who: Identity, notFound: () => ToolError): Promise<CheckPrResult> {
+    const n = pr.number;
+    // Docsworth's shape: from this repo (a fork's head repo differs; a deleted fork's is null),
+    // a branch named as openPagePr names them, into the default branch, a few files.
+    if (!pr.head.repo || pr.head.repo.id !== pr.base.repo.id) throw notFound();
+    const kind = DOCSWORTH_BRANCH.exec(pr.head.ref)?.[1] as CheckPrResult["kind"] | undefined;
+    if (!kind || pr.base.ref !== base) throw notFound();
+    if (!(pr.changed_files >= 1 && pr.changed_files <= MAX_PR_FILES)) throw notFound();
+    // One page, not paginated: a push between the two calls can't grow it past the cap.
+    const { files, more } = await gh.listPullFiles(repoSlug, n, MAX_PR_FILES + 1);
+    if (more || files.length < 1 || files.length > MAX_PR_FILES) throw notFound();
+
+    const repo = this.current();
+    const root = repo.config.knowledge_root;
+    const visible = new Map(visiblePages(repo, who).map((p) => [p.path, p]));
+    const invalid = new Set(repo.invalid.map((p) => p.path));
+    const pages: PrPage[] = [];
+    const acls: string[] = [];
+    for (const f of files) {
+      // Docsworth only adds or modifies a page; a removal, rename or copy is someone else's.
+      if (f.status !== "added" && f.status !== "modified") throw notFound();
+      const segments = f.filename.split("/");
+      if (!f.filename.startsWith(`${root}/`) || !f.filename.endsWith(".md") || segments.some((s) => s === "" || s === "." || s === "..")) throw notFound();
+      // The default branch, through visiblePages: a modified page must be one the caller sees;
+      // an added path must not be an invalid page (no trustworthy ACL), nor a page they can't see.
+      const seen = visible.get(f.filename);
+      if (f.status === "modified" && !seen) throw notFound();
+      if (f.status === "added" && (invalid.has(f.filename) || (repo.byPath.has(f.filename) && !seen))) throw notFound();
+      // The head, by blob sha (no path lookup to follow), through the loader's own parser.
+      if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(f.sha)) throw notFound();
+      const head = parsePage(f.filename, await gh.getBlob(repoSlug, f.sha, MAX_PAGE_BYTES));
+      if (!isPage(head) || !canSee(head, who)) throw notFound();
+      if (seen && head.id !== seen.id) throw notFound();
+      const from = seen ?? head;
+      pages.push({ id: from.id, title: from.title, path: f.filename, owner_team: from.owner_team, change: f.status, on_default: Boolean(seen) });
+      acls.push(head.acl, ...(seen ? [seen.acl] : []));
+    }
+
+    // The latest decision per reviewer; a dismissal clears it, a comment isn't one.
+    const latest = new Map<number, string>();
+    for (const r of await gh.listPullReviews(repoSlug, n)) {
+      if (!r.user) continue;
+      if (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED") latest.set(r.user.id, r.state);
+      else if (r.state === "DISMISSED") latest.delete(r.user.id);
+    }
+    const reviews = {
+      approved: [...latest.values()].filter((s) => s === "APPROVED").length,
+      changes_requested: [...latest.values()].filter((s) => s === "CHANGES_REQUESTED").length,
+    };
+
+    const state = pr.merged_at ? "merged" : pr.state === "closed" ? "closed" : "open";
+    const owners = [...new Set(pages.map((p) => `@${repo.config.github.org}/${p.owner_team}`))].join(", ");
+    const note =
+      state === "merged"
+        ? "Merged: the change is on the default branch."
+        : state === "closed"
+          ? "Closed without merging: the change wasn't made."
+          : pr.draft
+            ? `Still a draft: it isn't up for review by ${owners} yet, and the default branch is unchanged.`
+            : `Open and waiting for review by ${owners}; the default branch is unchanged.${reviews.changes_requested ? " Changes were requested: read the review on the PR before proposing again." : ""}`;
+
+    // Only now, with every check passed: a refusal above leaves the session as it was.
+    this.taint(acls.map((acl) => ({ acl })));
+    return {
+      pr_number: n,
+      pr_url: pr.html_url,
+      kind,
+      state,
+      draft: Boolean(pr.draft),
+      merged_at: pr.merged_at,
+      closed_at: pr.closed_at,
+      updated_at: pr.updated_at,
+      reviews,
+      pages,
+      note,
+    };
   }
 }

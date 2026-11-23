@@ -11,7 +11,8 @@ date. This plugin gives Claude Code the Docsworth MCP server and four skills.
 ## What it adds
 
 - **The `docsworth` MCP server.**
-  - **Read tools:** `search`, `read`, `list` and `stale`.
+  - **Read tools:** `search`, `read`, `list` and `stale`, and `check_pr`, which reports on a
+    pull request the write tools opened: open, merged or closed, and its reviews.
   - **Write tools:** `propose_edit`, `draft_page` and `verify`. Each opens a pull request for
     the page's owning team. Nothing is written to a default branch.
 - **Four skills.**
@@ -60,11 +61,12 @@ date. This plugin gives Claude Code the Docsworth MCP server and four skills.
   2. `GH_TOKEN`;
   3. `gh auth token`.
 - It sends the token only to GitHub's API: `api.github.com`, or the GitHub Enterprise Server
-  host in `github.api_url` or `DOCSWORTH_GITHUB_API_URL`. It uses GitHub for three things:
+  host in `github.api_url` or `DOCSWORTH_GITHUB_API_URL`. It uses GitHub for four things:
   - to learn who you are and which teams you're in, so you see only pages your teams may
     read;
   - to read pages;
-  - to open the pull requests the write tools make.
+  - to open the pull requests the write tools make;
+  - to read those pull requests back (`check_pr`).
 - **With Docsworth pro, run through `DOCSWORTH_BIN`,** the config's `audit_http` block can
   also send each audit event to your own collector, such as a SIEM or a log pipeline:
   - to the URL in the environment variable its `url_env` names, over HTTPS;

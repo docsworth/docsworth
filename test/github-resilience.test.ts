@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConfigSchema } from "../src/core/config.js";
-import { type FetchLike, GitHubClient, GitHubError } from "../src/core/github.js";
+import { BlobTooLargeError, type FetchLike, GitHubClient, GitHubError } from "../src/core/github.js";
 import { IdentityError, IdentityProvider } from "../src/core/identity.js";
 import { branchName } from "../src/core/writes.js";
 import { FakeGitHub } from "./fake-github.js";
@@ -183,5 +183,47 @@ describe("concurrent proposals", () => {
     const names = new Set(Array.from({ length: 50 }, () => branchName("propose", "rb-deploy-prod", at)));
     expect(names.size).toBe(50);
     expect([...names][0]).toMatch(/^docsworth\/propose\/rb-deploy-prod-20261102T120000-[0-9a-f]{6}$/);
+  });
+});
+
+describe("a capped body read (getBlob)", () => {
+  /** A fetch answering one streamed body, with whatever headers the test claims. */
+  const streaming = (chunks: number, chunkBytes: number, headers: Record<string, string> = {}) => {
+    let read = 0;
+    const fetch: FetchLike = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(c) {
+            if (read >= chunks) return c.close();
+            read++;
+            c.enqueue(new Uint8Array(chunkBytes).fill(120));
+          },
+        }),
+        { status: 200, headers },
+      );
+    return { gh: new GitHubClient("t", { fetch, sleep: async () => {} }), chunksRead: () => read };
+  };
+
+  it("counts the bytes it reads, whatever content-length says, and stops at the cap", async () => {
+    // A small declared length (as a compressed body would have) in front of 2 MB.
+    const s = streaming(32, 64 * 1024, { "content-length": "10", "content-encoding": "gzip" });
+    await expect(s.gh.getBlob("o/r", "a".repeat(40), 1024 * 1024)).rejects.toBeInstanceOf(BlobTooLargeError);
+    expect(s.chunksRead()).toBeLessThan(32); // cancelled, not read to the end
+  });
+
+  it("refuses an unencoded body whose declared length is over the cap before reading it", async () => {
+    const s = streaming(32, 64 * 1024, { "content-length": String(2 * 1024 * 1024) });
+    await expect(s.gh.getBlob("o/r", "a".repeat(40), 1024 * 1024)).rejects.toBeInstanceOf(BlobTooLargeError);
+    expect(s.chunksRead()).toBeLessThanOrEqual(1); // the stream's own prefetch; a counted read takes 17
+  });
+
+  it("returns a body under the cap as text, and asks for the raw media type", async () => {
+    const seen: string[] = [];
+    const fetch: FetchLike = async (_url, init) => {
+      seen.push(new Headers(init?.headers).get("accept") ?? "");
+      return new Response("---\nid: x\n---\n", { status: 200 });
+    };
+    expect(await new GitHubClient("t", { fetch }).getBlob("o/r", "a".repeat(40), 1024)).toBe("---\nid: x\n---\n");
+    expect(seen).toEqual(["application/vnd.github.raw+json"]);
   });
 });

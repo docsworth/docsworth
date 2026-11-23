@@ -49,6 +49,7 @@ export const FIELD_CHECKS: Readonly<Record<string, (v: unknown) => boolean>> = {
   max_nodes: (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 500,
   list_limit: (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000,
   snippets: (v) => v === "markdown" || v === "text",
+  pr_number: (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1e9,
 };
 
 const ids = (xs: unknown) => (Array.isArray(xs) ? xs.map((x: Structured) => String(x?.id)) : []);
@@ -93,6 +94,17 @@ export const TOOLS: readonly ToolSpec[] = [
     policy: "draft_page",
     auditFields: ["type", "owner_team", "acl", "draft"],
     returned: (sc) => ({ ...(typeof sc.id === "string" ? { returned: [sc.id] } : {}), ...prUrl(sc) }),
+  },
+  // Reads a PR back, so it answers to `read`. Only pages whose id came from the default
+  // branch are recorded: a head can claim any id, a hidden page's included. No pr_url,
+  // which in the log means a write opened that PR.
+  {
+    name: "check_pr",
+    surface: "all",
+    write: false,
+    policy: "read",
+    auditFields: ["pr_number"],
+    returned: (sc) => ({ returned: Array.isArray(sc.pages) ? sc.pages.filter((p: Structured) => p?.on_default === true).map((p: Structured) => String(p.id)) : [] }),
   },
   // The web app's views, on `docsworth serve` sessions only. They show page lists, so they
   // answer to `list`: a policy that refuses `list` refuses them too.

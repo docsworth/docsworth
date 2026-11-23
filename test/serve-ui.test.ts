@@ -21,7 +21,7 @@ import { acmeOnGitHub, copyAcme, fixedIdentity, INDEX, makeRepo, NOW, page } fro
 
 const TOKEN = "u".repeat(43);
 const UI_TOOLS = ["ui_capabilities", "ui_graph", "ui_overview", "ui_page"];
-const STDIO_TOOLS = ["draft_page", "list", "propose_edit", "read", "search", "stale", "verify"];
+const STDIO_TOOLS = ["check_pr", "draft_page", "list", "propose_edit", "read", "search", "stale", "verify"];
 
 class MemorySink implements AuditSink {
   readonly name = "memory";

@@ -53,6 +53,9 @@ then `gh auth token`.
 - **Read-only use:** `repo` (or fine-grained *contents: read*) on the knowledge repo,
   plus `read:org` so team ACLs work.
 - **For `propose_edit` and `verify`:** also *contents: write* and *pull requests: write*.
+- **For `check_pr`:** *pull requests: read*, beside the *contents: read* above (`repo`
+  covers both). Without the first, it says which permission is missing. Without the
+  second, it reports every PR as not found.
 
 ## 4. Turn on the review loop
 

@@ -65,6 +65,66 @@ export interface PullInfo {
   head: { ref: string };
   base: { ref: string };
 }
+/** A PR as `check_pr` reads it. `head.repo` is null when the fork it came from was deleted. */
+export interface PullDetail {
+  number: number;
+  html_url: string;
+  state: "open" | "closed";
+  merged_at: string | null;
+  closed_at: string | null;
+  updated_at: string;
+  draft?: boolean;
+  changed_files: number;
+  head: { ref: string; sha: string; repo: { id: number } | null };
+  base: { ref: string; repo: { id: number } };
+}
+export interface PullFile {
+  filename: string;
+  /** added, removed, modified, renamed, copied, changed or unchanged. */
+  status: string;
+  /** The blob at the head; for a submodule (gitlink), a commit instead. */
+  sha: string;
+  previous_filename?: string;
+}
+export interface PullReview {
+  /** null for a deleted account. */
+  user: { id: number; login: string } | null;
+  state: string;
+}
+
+/** A response body larger than the caller allowed; never retried. */
+export class BlobTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`the response is larger than ${maxBytes} bytes`);
+  }
+}
+
+/**
+ * Read a body, refusing it past `max` decoded bytes. fetch decompresses, so a declared
+ * `content-length` (the encoded size) only refuses early when the body isn't encoded.
+ */
+async function readCapped(res: Response, max: number): Promise<string> {
+  const declared = Number(res.headers.get("content-length"));
+  if (!res.headers.has("content-encoding") && Number.isFinite(declared) && declared > max) {
+    await res.body?.cancel().catch(() => {});
+    throw new BlobTooLargeError(max);
+  }
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw new BlobTooLargeError(max);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 export class GitHubClient {
   private readonly fetch: FetchLike;
@@ -87,7 +147,17 @@ export class GitHubClient {
     if (why) throw new Error(`the GitHub API URL (${urlForError(this.baseUrl)}) ${why}`);
   }
 
-  async request<T>(method: string, path: string, body?: unknown, accept = "application/vnd.github+json"): Promise<{ data: T; headers: Headers }> {
+  /**
+   * One API call. `raw` returns the body as text instead of parsing it as JSON; `maxBytes`
+   * caps the body read (BlobTooLargeError past it, which isn't retried).
+   */
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    accept = "application/vnd.github+json",
+    opts: { raw?: boolean; maxBytes?: number } = {},
+  ): Promise<{ data: T; headers: Headers }> {
     const read = method === "GET" || method === "HEAD";
     // Serialized once, outside the retry: a body that can't be (a fault here) throws as is.
     const payload = body === undefined ? undefined : JSON.stringify(body);
@@ -107,7 +177,7 @@ export class GitHubClient {
           body: payload,
           signal: AbortSignal.timeout(this.timeoutMs),
         });
-        text = await res.text();
+        text = opts.maxBytes === undefined ? await res.text() : await readCapped(res, opts.maxBytes);
       } catch (cause) {
         // No answer: the connection failed (fetch's TypeError, or undici's "terminated" when
         // it drops while the body is read), or nothing came within the timeout. Anything
@@ -138,7 +208,7 @@ export class GitHubClient {
         }
         throw err;
       }
-      return { data: (text ? JSON.parse(text) : null) as T, headers: res.headers };
+      return { data: (opts.raw ? text : text ? JSON.parse(text) : null) as T, headers: res.headers };
     }
   }
 
@@ -248,6 +318,21 @@ export class GitHubClient {
   }
   async createPull(repo: string, args: { title: string; head: string; base: string; body: string; draft?: boolean }): Promise<PullInfo> {
     return (await this.request<PullInfo>("POST", `/repos/${repo}/pulls`, args)).data;
+  }
+  getPull(repo: string, n: number): Promise<PullDetail> {
+    return this.get(`/repos/${repo}/pulls/${n}`);
+  }
+  /** One page of a PR's files (`per_page` at most), and whether GitHub has more. */
+  async listPullFiles(repo: string, n: number, perPage: number): Promise<{ files: PullFile[]; more: boolean }> {
+    const { data, headers } = await this.request<PullFile[]>("GET", `/repos/${repo}/pulls/${n}/files?per_page=${perPage}`);
+    return { files: data, more: /rel="next"/.test(headers.get("link") ?? "") };
+  }
+  listPullReviews(repo: string, n: number): Promise<PullReview[]> {
+    return this.paginate(`/repos/${repo}/pulls/${n}/reviews`);
+  }
+  /** A blob's own bytes as text, by sha: no path lookup, and nothing past `maxBytes` is read. */
+  async getBlob(repo: string, sha: string, maxBytes: number): Promise<string> {
+    return (await this.request<string>("GET", `/repos/${repo}/git/blobs/${encodeURIComponent(sha)}`, undefined, "application/vnd.github.raw+json", { raw: true, maxBytes })).data;
   }
 }
 

@@ -35,7 +35,7 @@ Record every answer. Anything wrong or out of date becomes an edit in step 3.
 
 - **If anything needs changing:** call `propose_edit` with the exact edits and a
   `reason` that says it came from verification. Verify only once those changes are
-  agreed. Verifying a page you know is wrong defeats the gate.
+  merged: `check_pr` with the edit's `pr_number` says whether it is. Verifying a page you know is wrong defeats the gate.
 - **If everything is still true:** call `verify` with the page id. It opens a PR that
   sets `last_verified` to today. If it's refused because the user isn't on the owning
   team, say which team can verify it and stop.

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { canSee, type Identity } from "../src/core/acl.js";
 import { loadConfig } from "../src/core/config.js";
@@ -16,6 +18,14 @@ const acme = acmeOnGitHub();
 afterAll(acme.cleanup);
 const repo = loadRepo(acme.root);
 const gh = new FakeGitHub("acme/knowledge", "acme", { tok: { login: "u", teams: [], push: true } }, acme.root);
+// check_pr: one Docsworth-shaped PR editing each page, and a number with no PR.
+const PRS = new Map(
+  repo.pages.map((p) => [
+    p.id,
+    gh.rawPull({ head: `docsworth/propose/${p.id}-20261102T090000-abc123`, files: [{ filename: p.path, status: "modified", content: `${readFileSync(join(acme.root, p.path), "utf8")}\nEdited.\n` }] }),
+  ]),
+);
+const NO_PR = 9999;
 
 const gitHubUser = (login: string, teams: string[]): Identity => ({ mode: "github", login, teams: new Set(teams), repoAccess: true, canWrite: true });
 const IDENTITIES: [string, Identity][] = [
@@ -91,6 +101,19 @@ describe("ACL matrix", () => {
         expect(a.error.replace(p.id, "X"), `${tool}(${p.id})`).toBe(b.error.replace("zz-unknown", "X"));
       }
     }
+
+    // check_pr on every page's PR: no trace of a hidden page, and a hidden page's PR reads
+    // exactly as a number with no PR, code and message.
+    const noPr = (await settle(() => s.checkPr({ pr_number: NO_PR }))) as { error?: string };
+    let answered = 0;
+    for (const [id, n] of PRS) {
+      const out = await settle(() => s.checkPr({ pr_number: n }));
+      assertNoTrace(out, hidden, `check_pr(#${n}, ${id})`);
+      if (!(out as { error?: string }).error) answered++;
+      if (hidden.some((p) => p.id === id)) expect((out as { error: string }).error?.replace(`#${n}`, "#N"), `check_pr(#${n}, ${id})`).toBe(noPr.error?.replace(`#${NO_PR}`, "#N"));
+    }
+    // Not vacuous: an identity with GitHub and repo access gets its visible pages' PRs answered.
+    if (who.mode === "github" && who.repoAccess) expect(answered).toBe(visible.length);
   });
 
   it("the matrix is not vacuous: each team identity sees a page others cannot", () => {
