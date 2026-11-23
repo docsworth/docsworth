@@ -98,7 +98,16 @@ try {
     if (!pr.isError) {
       const main = await gh.getFile(repo, "knowledge/runbooks/rollback-deploy.md", info.default_branch || "main");
       check("main unchanged after propose_edit", !Buffer.from(main.content, "base64").toString("utf8").includes("live check"));
+      // Reads the PR, its files, the head blob (raw) and its reviews: the four calls the fake stands in for.
+      const back = await call("check_pr", { pr_number: pr.data.pr_number });
+      check(
+        "check_pr reads that PR back from GitHub: open, a draft, its page from the default branch",
+        !back.isError && back.data.state === "open" && back.data.draft === true && back.data.kind === "propose" && back.data.pages?.[0]?.id === "rb-rollback-deploy" && back.data.pages?.[0]?.on_default === true,
+        JSON.stringify(back.data).slice(0, 300),
+      );
     }
+    const noPr = await call("check_pr", { pr_number: 999999 });
+    check("check_pr: a number with no PR is not_found", noPr.isError && noPr.data.error?.code === "not_found" && noPr.data.error?.message === "no Docsworth pull request #999999", noPr.data.error?.message);
 
     const verify = await call("verify", { id: "svc-payments" });
     check("verify refused for a non-member of the owner team", verify.isError && verify.data.error.code === "forbidden", verify.data.error?.message);

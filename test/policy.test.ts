@@ -71,11 +71,19 @@ describe("per-tool allowlists", () => {
   it("drops refused tools from that identity's tools/list, and a call to one is refused", async () => {
     const root = acmeWithPolicy("tools:\n  stale: { teams: [platform] }");
     const bob = await tools(root, BOB);
-    expect(bob.list.map((t) => t.name).sort()).toEqual(["draft_page", "list", "propose_edit", "read", "search", "verify"]);
+    expect(bob.list.map((t) => t.name).sort()).toEqual(["check_pr", "draft_page", "list", "propose_edit", "read", "search", "verify"]);
     const r = await bob.client.callTool({ name: "stale", arguments: {} });
     expect(r).toMatchObject({ isError: true, content: [{ text: "MCP error -32602: Tool stale disabled" }] });
     const alice = await tools(root, ALICE);
     expect(alice.list.map((t) => t.name)).toContain("stale");
+  });
+
+  it("check_pr answers to `read`: a policy that refuses read drops it too", async () => {
+    const root = acmeWithPolicy("tools:\n  read: { teams: [platform] }");
+    const bob = await tools(root, BOB);
+    expect(bob.list.map((t) => t.name)).not.toContain("check_pr");
+    expect(bob.list.map((t) => t.name)).not.toContain("read");
+    expect((await tools(root, ALICE)).list.map((t) => t.name)).toContain("check_pr");
   });
 
   it("applies a policy change to the next call, without a restart", async () => {
@@ -130,7 +138,7 @@ describe("per-tool allowlists", () => {
     (await import("node:fs")).utimesSync(cfg, later, later);
     await new Promise((r) => setTimeout(r, 120));
     const tools = (await client.listTools()).tools;
-    expect(tools.map((t) => t.name).sort()).toEqual(["draft_page", "list", "propose_edit", "read", "search", "stale", "verify"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["check_pr", "draft_page", "list", "propose_edit", "read", "search", "stale", "verify"]);
     expect(tools.find((t) => t.name === "verify")?._meta?.[REQUIRES_USER_INTERACTION]).toBe(true);
   });
 
@@ -144,7 +152,7 @@ describe("writes: disabled", () => {
   it("offers no write tools, and the service refuses them too", async () => {
     const root = acmeWithPolicy("writes: disabled");
     const { list } = await tools(root, ALICE);
-    expect(list.map((t) => t.name).sort()).toEqual(["list", "read", "search", "stale"]);
+    expect(list.map((t) => t.name).sort()).toEqual(["check_pr", "list", "read", "search", "stale"]);
     const s = new KnowledgeService(root, fixedIdentity(ALICE), () => NOW);
     expect(await refusal(s.proposeEdit({ id: "rb-deploy-prod", content: "x", reason: "r" }))).toEqual({
       code: "forbidden",
@@ -159,7 +167,7 @@ describe("writes: disabled", () => {
     const client = new Client({ name: "policy-test", version: "0" });
     await client.connect(c);
     cleanups.push(() => void client.close());
-    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(["list", "read", "search", "stale"]);
+    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(["check_pr", "list", "read", "search", "stale"]);
   });
 
   it("is refused before GitHub is asked for anything", async () => {
@@ -178,7 +186,7 @@ describe("require_human_approval", () => {
   it("marks only the write tools, and only when on", async () => {
     const on = await tools(acmeWithPolicy("require_human_approval: true"), ALICE);
     const meta = Object.fromEntries(on.list.map((t) => [t.name, t._meta?.[REQUIRES_USER_INTERACTION] ?? null]));
-    expect(meta).toEqual({ search: null, read: null, list: null, stale: null, propose_edit: true, verify: true, draft_page: true });
+    expect(meta).toEqual({ search: null, read: null, list: null, stale: null, propose_edit: true, verify: true, draft_page: true, check_pr: null });
     const off = await tools(acmeWithPolicy("writes: enabled"), ALICE);
     expect(off.list.every((t) => t._meta?.[REQUIRES_USER_INTERACTION] === undefined)).toBe(true);
   });

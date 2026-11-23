@@ -48,10 +48,10 @@ describe("docsworth mcp (local-only repo)", () => {
     acme.cleanup();
   });
 
-  it("exposes exactly the seven tools, read tools annotated read-only", async () => {
+  it("exposes exactly the eight tools, read tools annotated read-only", async () => {
     const { tools } = await s.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["draft_page", "list", "propose_edit", "read", "search", "stale", "verify"]);
-    for (const t of tools.filter((t) => ["search", "read", "list", "stale"].includes(t.name))) expect(t.annotations?.readOnlyHint).toBe(true);
+    expect(tools.map((t) => t.name).sort()).toEqual(["check_pr", "draft_page", "list", "propose_edit", "read", "search", "stale", "verify"]);
+    for (const t of tools.filter((t) => ["search", "read", "list", "stale", "check_pr"].includes(t.name))) expect(t.annotations?.readOnlyHint).toBe(true);
     expect(tools.find((t) => t.name === "search")?.description).toMatch(/untrusted data/);
   });
 

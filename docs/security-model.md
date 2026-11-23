@@ -35,7 +35,7 @@ Roles are derived from GitHub and `policy:` in `.knowledge/config.yaml`. None ar
 
 | Role | Who | May |
 | --- | --- | --- |
-| Reader | anyone whose token can read the knowledge repo | search, read, list and stale: `internal` pages, plus their teams' pages |
+| Reader | anyone whose token can read the knowledge repo | search, read, list, stale and check_pr: `internal` pages, plus their teams' pages |
 | Contributor | push access, and `policy.tools.propose_edit` (if set) names one of their teams | open edit PRs |
 | Owner | member of a page's `owner_team` | open verify PRs for that page |
 | Admin | member of `policy.admins` | approve changes to the config and to CODEOWNERS, as the *only* owner of the winning CODEOWNERS rule (lint errors otherwise, because any one co-owner's approval would satisfy GitHub) |
@@ -67,7 +67,20 @@ The admin role is real only when three things hold. Lint can see none of them, s
 Every tool resolves pages through a single `visiblePages(identity)` view, so no tool can
 bypass the filter:
 
-- **Applied everywhere:** search, read, list, stale, and the write tools.
+- **Applied everywhere:** search, read, list, stale, check_pr, and the write tools.
+- **`check_pr` reads a PR back,** and its own files decide which pages it touches, never
+  its branch name, which anyone with push can choose. Each page must be visible on the
+  default branch where it's there, through `visiblePages`, and as the PR's head has it.
+  The head's page isn't in the loaded repo, so that side is checked with `canSee` on the
+  exact blob, parsed by the loader's own parser. A PR touching a page the caller can't
+  see, or one without a Docsworth PR's shape (its branch, base and files), gives the same
+  `not_found` as a number with no PR. The shape isn't proof of authorship: anyone with push
+  can open a PR of that shape, and it's reported like Docsworth's, with only pages the
+  caller can see.
+- **What `check_pr` can still show:** its timing, and an `unavailable` when GitHub fails
+  partway through, can tell that a PR got past the first checks. No page's id, title,
+  path or text comes with it, and the caller's own token can already read that PR on
+  GitHub. A server that read PRs with a shared token would have to revisit this.
 - **No existence oracle:** a hidden id and an unknown id produce the same `not_found`
   error, so writes can't be used to probe for hidden pages.
 - **No hidden directories:** `list` only reveals directories that contain a page the

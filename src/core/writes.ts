@@ -97,6 +97,12 @@ export function branchName(verb: string, pageId: string, at: Date, nonce = rando
 }
 
 /**
+ * What `branchName` builds, for `check_pr` to recognize a Docsworth PR by. Only the shape:
+ * anyone with push can name a branch this way, so it never says which page a PR touches.
+ */
+export const DOCSWORTH_BRANCH = /^docsworth\/(propose|verify|draft)\/.+-\d{8}T\d{6}-[0-9a-f]{6}$/;
+
+/**
  * The only write path: read the file at the default branch, transform it, create a new
  * branch, commit to that branch (explicitly), open a PR. Nothing ever targets the
  * default branch; if a step after branch creation fails, the branch is removed.

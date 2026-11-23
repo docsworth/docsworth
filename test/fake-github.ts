@@ -18,15 +18,57 @@ export interface FakeUser {
    * says so in `x-github-sso: partial-results; organizations=<org id>`.
    */
   sso?: "required" | "partial" | "teams-required";
+  /** true → the PR endpoints answer 403 (a fine-grained token without Pull requests: read). */
+  noPulls?: boolean;
+  /** true → contents and blobs answer 403 (a fine-grained token without Contents: read). */
+  noContents?: boolean;
 }
 
 /** The fake org's numeric id, as in `x-github-sso: partial-results; organizations=…`. */
 export const FAKE_ORG_ID = 4242;
+/** The fake repo's numeric id: a PR's base repo, and its head repo unless it's a fork. */
+export const FAKE_REPO_ID = 777;
 
 interface FileRec {
   content: string;
   sha: string;
 }
+
+/** A file in a PR's diff, as GET …/pulls/:n/files lists it. */
+export interface FakePullFile {
+  filename: string;
+  status: string;
+  sha: string;
+  previous_filename?: string;
+}
+
+export interface FakePull {
+  number: number;
+  title: string;
+  head: string;
+  base: string;
+  body: string;
+  draft?: boolean;
+  state: "open" | "closed";
+  merged_at: string | null;
+  closed_at: string | null;
+  /** The default branch when the PR was opened: its merge base, what the head is diffed against. */
+  baseFiles: Map<string, FileRec>;
+  /** The head's files, kept when it merges, since its branch may then be deleted. */
+  headFiles?: Map<string, FileRec>;
+  /** null: the fork it came from was deleted. */
+  headRepoId: number | null;
+  /** Set by rawPull: the diff as given, not computed. */
+  files?: FakePullFile[];
+  /** Set by rawPull: `changed_files` as given. */
+  changedFiles?: number;
+  /** Set by rawPull: the files list says there's a next page, however long it is. */
+  moreFiles?: boolean;
+  reviews: { user: { id: number; login: string } | null; state: string }[];
+}
+
+/** A rawPull file: its content (stored as a blob), or a bare sha (a gitlink, say). */
+export type RawPullFile = { filename: string; status: string; previous_filename?: string } & ({ content: string } | { sha: string });
 
 const sha = (s: string) => createHash("sha1").update(s).digest("hex");
 
@@ -40,7 +82,13 @@ export class FakeGitHub {
   readonly defaultBranch = "main";
   readonly branches = new Map<string, Map<string, FileRec>>();
   readonly createdBranches = new Set<string>();
-  readonly pulls: { number: number; title: string; head: string; base: string; body: string; draft?: boolean }[] = [];
+  readonly pulls: FakePull[] = [];
+  /** Every file content ever stored, by blob sha, as GET …/git/blobs/:sha serves them. */
+  readonly blobs = new Map<string, string>();
+  /** When set, GET …/git/blobs/:sha answers this instead (a rate limit, a 5xx). */
+  blobError: { status: number; json: unknown; headers?: Record<string, string> } | null = null;
+  /** When set, GET …/pulls/:n answers this instead. */
+  pullError: { status: number; json: unknown; headers?: Record<string, string> } | null = null;
   readonly violations: string[] = [];
   readonly requests: { method: string; path: string; body?: unknown }[] = [];
   /** Ruleset rules returned for the default branch, or the error GitHub gives instead. */
@@ -65,7 +113,7 @@ export class FakeGitHub {
     seedDir?: string,
   ) {
     const main = new Map<string, FileRec>();
-    if (seedDir) for (const [path, content] of walk(seedDir)) main.set(path, { content, sha: sha(content) });
+    if (seedDir) for (const [path, content] of walk(seedDir)) main.set(path, this.rec(content));
     this.branches.set(this.defaultBranch, main);
   }
 
@@ -73,16 +121,118 @@ export class FakeGitHub {
     return this.branches.get(branch)?.get(path)?.content;
   }
 
+  /** A file record, its content stored as a blob. */
+  private rec(content: string): FileRec {
+    const s = sha(content);
+    this.blobs.set(s, content);
+    return { content, sha: s };
+  }
+
+  /** Set a file on a branch directly, as a person pushing would (not through Docsworth). */
+  push(branch: string, path: string, content: string | null): void {
+    const files = this.branches.get(branch);
+    if (!files) throw new Error(`fake: no branch ${branch}`);
+    if (content === null) files.delete(path);
+    else files.set(path, this.rec(content));
+  }
+
+  /** Merge a PR: its diff lands on the default branch, and its branch is deleted. */
+  merge(n: number, at = "2026-11-02T12:00:00Z"): void {
+    const pr = this.pull(n);
+    const head = this.headFilesOf(pr);
+    const main = this.branches.get(this.defaultBranch)!;
+    for (const f of this.diff(pr)) {
+      if (f.status === "removed") main.delete(f.filename);
+      else main.set(f.filename, head.get(f.filename)!);
+    }
+    pr.headFiles = head;
+    this.branches.delete(pr.head);
+    Object.assign(pr, { state: "closed", merged_at: at, closed_at: at });
+  }
+
+  closePull(n: number, at = "2026-11-02T12:00:00Z"): void {
+    Object.assign(this.pull(n), { state: "closed", closed_at: at });
+  }
+
+  review(n: number, user: { id: number; login: string } | null, state: string): void {
+    this.pull(n).reviews.push({ user, state });
+  }
+
+  /**
+   * A PR built by hand, as anyone with push (or a fork) could open one: its branch, diff,
+   * head repo and `changed_files` are as given, not as Docsworth would make them.
+   */
+  rawPull(args: { head: string; base?: string; files: RawPullFile[]; headRepoId?: number | null; changedFiles?: number; moreFiles?: boolean; draft?: boolean }): number {
+    const number = this.pulls.length + 1;
+    const files = args.files.map((f) => ({
+      filename: f.filename,
+      status: f.status,
+      sha: "content" in f ? this.rec(f.content).sha : f.sha,
+      ...(f.previous_filename ? { previous_filename: f.previous_filename } : {}),
+    }));
+    this.pulls.push({
+      number,
+      title: `Raw ${number}`,
+      head: args.head,
+      base: args.base ?? this.defaultBranch,
+      body: "",
+      draft: args.draft,
+      state: "open",
+      merged_at: null,
+      closed_at: null,
+      baseFiles: new Map(this.branches.get(this.defaultBranch)),
+      headRepoId: args.headRepoId === undefined ? FAKE_REPO_ID : args.headRepoId,
+      files,
+      changedFiles: args.changedFiles ?? files.length,
+      moreFiles: args.moreFiles,
+      reviews: [],
+    });
+    return number;
+  }
+
+  private pull(n: number): FakePull {
+    const pr = this.pulls.find((p) => p.number === n);
+    if (!pr) throw new Error(`fake: no PR #${n}`);
+    return pr;
+  }
+
+  private headFilesOf(pr: FakePull): Map<string, FileRec> {
+    return this.branches.get(pr.head) ?? pr.headFiles ?? new Map();
+  }
+
+  /** A PR's diff: as given (rawPull), or its head against the merge base. */
+  private diff(pr: FakePull): FakePullFile[] {
+    if (pr.files) return pr.files;
+    const head = this.headFilesOf(pr);
+    const out: FakePullFile[] = [];
+    for (const [filename, rec] of head) {
+      const before = pr.baseFiles.get(filename);
+      if (!before) out.push({ filename, status: "added", sha: rec.sha });
+      else if (before.sha !== rec.sha) out.push({ filename, status: "modified", sha: rec.sha });
+    }
+    for (const [filename, rec] of pr.baseFiles) if (!head.has(filename)) out.push({ filename, status: "removed", sha: rec.sha });
+    return out.sort((a, b) => a.filename.localeCompare(b.filename));
+  }
+
   /** fetch-compatible entry point. */
   readonly fetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
     const u = new URL(url);
-    const auth = new Headers(init.headers).get("authorization") ?? "";
+    const h = new Headers(init.headers);
+    const auth = h.get("authorization") ?? "";
     const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
-    const { status, json, headers } = this.handle((init.method ?? "GET").toUpperCase(), u.pathname, u.searchParams, auth.replace(/^Bearer /, ""), body);
+    const { status, json, raw, headers } = this.handle((init.method ?? "GET").toUpperCase(), u.pathname, u.searchParams, auth.replace(/^Bearer /, ""), body, h.get("accept") ?? "");
+    if (raw !== undefined) return new Response(raw, { status, headers: { "content-type": "application/vnd.github.raw", ...headers } });
     return new Response(json === undefined ? "" : JSON.stringify(json), { status, headers: { "content-type": "application/json", ...headers } });
   };
 
-  private handle(method: string, path: string, q: URLSearchParams, token: string, body?: Record<string, unknown>): { status: number; json?: unknown; headers?: Record<string, string> } {
+  private handle(
+    method: string,
+    path: string,
+    q: URLSearchParams,
+    token: string,
+    body?: Record<string, unknown>,
+    accept = "",
+  ): { status: number; json?: unknown; raw?: string; headers?: Record<string, string> } {
     this.requests.push({ method, path, body });
     const user = this.users[token];
     if (!user) return { status: 401, json: { message: "Bad credentials" } };
@@ -135,6 +285,54 @@ export class FakeGitHub {
       return r ? { status: 200, json: r } : { status: 404, json: { message: "Not Found" } };
     }
 
+    if (user.noContents && (rest.startsWith("/contents/") || rest.startsWith("/git/blobs/")))
+      return { status: 403, json: { message: "Resource not accessible by personal access token" } };
+    if (user.noPulls && rest.startsWith("/pulls")) return { status: 403, json: { message: "Resource not accessible by personal access token" } };
+
+    const blob = /^\/git\/blobs\/([^/]+)$/.exec(rest);
+    if (method === "GET" && blob) {
+      if (this.blobError) return this.blobError;
+      const content = this.blobs.get(blob[1]!);
+      // GitHub refuses a sha that isn't a blob (a gitlink's commit, say).
+      if (content === undefined) return { status: 404, json: { message: "Not Found" } };
+      if (accept.includes("raw")) return { status: 200, raw: content };
+      return { status: 200, json: { sha: blob[1], size: Buffer.byteLength(content), encoding: "base64", content: Buffer.from(content).toString("base64") } };
+    }
+
+    const pullRoute = /^\/pulls\/(\d+)(\/files|\/reviews)?$/.exec(rest);
+    if (method === "GET" && pullRoute) {
+      if (!pullRoute[2] && this.pullError) return this.pullError;
+      const pr = this.pulls.find((p) => p.number === Number(pullRoute[1]));
+      if (!pr) return { status: 404, json: { message: "Not Found" } };
+      if (pullRoute[2] === "/files") {
+        const files = this.diff(pr);
+        const per = Number(q.get("per_page") ?? 30);
+        const more = files.length > per || Boolean(pr.moreFiles);
+        return {
+          status: 200,
+          json: files.slice(0, per),
+          headers: more ? { link: `<https://api.github.com${path}?per_page=${per}&page=2>; rel="next"` } : {},
+        };
+      }
+      if (pullRoute[2] === "/reviews") return { status: 200, json: pr.reviews };
+      return {
+        status: 200,
+        json: {
+          number: pr.number,
+          html_url: `https://github.com/${this.repo}/pull/${pr.number}`,
+          title: pr.title,
+          state: pr.state,
+          merged_at: pr.merged_at,
+          closed_at: pr.closed_at,
+          updated_at: pr.closed_at ?? "2026-11-02T09:00:00Z",
+          draft: Boolean(pr.draft),
+          changed_files: pr.changedFiles ?? this.diff(pr).length,
+          head: { ref: pr.head, sha: sha(`head:${pr.number}`), repo: pr.headRepoId === null ? null : { id: pr.headRepoId } },
+          base: { ref: pr.base, repo: { id: FAKE_REPO_ID } },
+        },
+      };
+    }
+
     if (rest.startsWith("/contents/")) {
       const filePath = rest.slice("/contents/".length);
       if (method === "GET") {
@@ -153,7 +351,7 @@ export class FakeGitHub {
         const current = files.get(filePath);
         if (current && current.sha !== body?.sha) return { status: 409, json: { message: "sha does not match" } };
         const content = Buffer.from(String(body?.content), "base64").toString("utf8");
-        files.set(filePath, { content, sha: sha(content) });
+        files.set(filePath, this.rec(content));
         return { status: 200, json: { content: { path: filePath } } };
       }
     }
@@ -188,7 +386,20 @@ export class FakeGitHub {
       if (!this.createdBranches.has(head)) this.violations.push(`PR head ${head} was not created by this flow`);
       if (body?.base !== this.defaultBranch) this.violations.push(`PR base is ${String(body?.base)}`);
       const number = this.pulls.length + 1;
-      this.pulls.push({ number, title: String(body?.title), head, base: String(body?.base), body: String(body?.body), draft: body?.draft as boolean | undefined });
+      this.pulls.push({
+        number,
+        title: String(body?.title),
+        head,
+        base: String(body?.base),
+        body: String(body?.body),
+        draft: body?.draft as boolean | undefined,
+        state: "open",
+        merged_at: null,
+        closed_at: null,
+        baseFiles: new Map(this.branches.get(this.defaultBranch)),
+        headRepoId: FAKE_REPO_ID,
+        reviews: [],
+      });
       return { status: 201, json: { number, html_url: `https://github.com/${this.repo}/pull/${number}`, head: { ref: head }, base: { ref: body?.base } } };
     }
     return { status: 404, json: { message: `fake: no route for ${method} ${path}` } };

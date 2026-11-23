@@ -156,7 +156,7 @@ export function createMcpServer(
     {
       title: "Propose an edit (opens a PR)",
       description:
-        "Propose a change to a page by opening a pull request against the knowledge repo for the owning team to review. Never writes to the default branch. Give one of: `edits` (exact old→new replacements, each `old` must match once), a new `body` (everything after the frontmatter, as `read` returns it; the frontmatter is kept), the full new `content`, frontmatter included, or `append` (a section added at the end of the page as it is now). id, owner_team, acl and last_verified cannot be changed here.",
+        "Propose a change to a page by opening a pull request against the knowledge repo for the owning team to review. Never writes to the default branch. Give one of: `edits` (exact old→new replacements, each `old` must match once), a new `body` (everything after the frontmatter, as `read` returns it; the frontmatter is kept), the full new `content`, frontmatter included, or `append` (a section added at the end of the page as it is now). id, owner_team, acl and last_verified cannot be changed here. To retire a page, use `edits` to replace its `status:` line with `status: deprecated`: a deprecated page is never cited, `search` lists it under `excluded`, and `stale` stops listing it.",
       inputSchema: {
         id: idArg,
         edits: z
@@ -216,6 +216,18 @@ export function createMcpServer(
       ...writeMeta,
     },
     (args) => after(run(() => service.draftPage(args))),
+  ));
+
+  registered.set("check_pr", server.registerTool(
+    "check_pr",
+    {
+      title: "Check a Docsworth pull request",
+      description:
+        "Check a pull request that `propose_edit`, `verify` or `draft_page` opened: whether it's open, merged or closed, its reviews, and the page it touches. Use it to follow up on a proposal before acting on it: before `verify` after an edit, or before proposing the same change again. A PR without a Docsworth PR's shape (its branch, base and files), or one touching a page you can't see, is reported as not found, the same as a number with no PR. The shape isn't proof of who opened it: check the number your own write returned.",
+      inputSchema: { pr_number: z.number().int().min(1).max(1e9).describe("The `pr_number` that `propose_edit`, `verify` or `draft_page` returned") },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (args) => after(run(() => service.checkPr(args))),
   ));
 
   // The web app's views: only on `docsworth serve` sessions, never on an agent's stdio server.

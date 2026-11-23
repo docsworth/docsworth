@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 export const TOOL = (name: string) => `mcp__plugin_docsworth_docsworth__${name}`;
-export const READ_TOOLS = ["search", "read", "list", "stale"].map(TOOL);
+export const READ_TOOLS = ["search", "read", "list", "stale", "check_pr"].map(TOOL);
 
 export interface ClaudeRun {
   result: string;

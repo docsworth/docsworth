@@ -142,7 +142,7 @@ reads `[restricted page]` too: a route can't be told from a hidden page's.
 | `docsworth stale [dir]` | Pages past their review SLA or without a team owner. |
 | `docsworth coverage [dir] [--html f]` | Percentage team-owned and percentage verified within SLA, by team; optional static dashboard (`--html`, pro). |
 | `docsworth digest [dir] [--send]` | **Pro.** Weekly per-team digest: due, overdue, most read by agents. Prints unless `--send`. |
-| `docsworth mcp [dir]` | The MCP server (stdio): `search`, `read`, `list`, `stale`, `propose_edit`, `verify`, `draft_page`. Without `dir`, it serves `DOCSWORTH_KNOWLEDGE_DIR`, else the current directory. |
+| `docsworth mcp [dir]` | The MCP server (stdio): `search`, `read`, `list`, `stale`, `propose_edit`, `verify`, `draft_page`, `check_pr`. Without `dir`, it serves `DOCSWORTH_KNOWLEDGE_DIR`, else the current directory. |
 | `docsworth serve [dir]` | The web app at `127.0.0.1:4747` (overview, search, pages, teams, a link graph, capture), and the same server over HTTP for it and the browser extension, behind a token kept in your state directory (`--print-token`, `--rotate-token`, `--allow-extension <id>`). |
 | `docsworth compile [dir] [--check]` | **Pro.** Canonical runbooks → `skills/<id>/SKILL.md`; `--check` exits 1 on drift. |
 | `docsworth mirror [dir]` | **Pro.** Read-only Confluence and Notion mirror into `.knowledge/mirror`, scored. |
