@@ -128,7 +128,8 @@ export function createMcpServer(
     "list",
     {
       title: "List pages",
-      description: "Navigate the knowledge tree from the root map (index.md) down: give a directory path relative to the knowledge root, or a page type. With no arguments, lists the root.",
+      description:
+        "Browse the knowledge tree from the root map (index.md) down. Give `path`, a directory relative to the knowledge root, for its index page, its pages and its subdirectories; or `type` for every page of that type, wherever it is (given both, `type` is used). With no arguments, lists the root. Returns each page's id, title, owner and whether it's `citable`, not its text: `read` an id for that. To find pages by what they say, use `search`.",
       inputSchema: {
         path: z.string().optional().describe("Directory under the knowledge root, e.g. `runbooks` or `services/payments`"),
         type: z.enum(PAGE_TYPES).optional(),
@@ -142,7 +143,8 @@ export function createMcpServer(
     "stale",
     {
       title: "Stale or unowned pages",
-      description: "Pages past their review SLA, never verified, or without a resolvable team owner, oldest due date first.",
+      description:
+        "List the pages that need their owners: past their review SLA, never verified, or without a resolvable team owner, oldest due date first, each with its owning team and the reason. Use it to find what to re-verify, or which team to ask about a page; `owner_team` narrows it to one team. None of these can be cited, so `search` and `read` leave their text out; retired (deprecated) pages aren't listed. The owning team confirms a page with `verify`, or changes it with `propose_edit`.",
       inputSchema: { owner_team: z.string().optional().describe("Only this team's pages") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -183,7 +185,8 @@ export function createMcpServer(
     "verify",
     {
       title: "Verify a page (owner only, opens a PR)",
-      description: "For members of the page's owning team: confirm the page is still true by opening a PR that sets last_verified to today.",
+      description:
+        "For members of the page's owning team: confirm the page is still true, as it stands, by opening a PR that sets last_verified to today. Nothing else on the page changes. Use it once someone on the team has checked the page against what it describes. If anything in it is wrong, use `propose_edit` instead (it can't set last_verified), and verify once that's merged. Anyone else is refused: `read` and `stale` name the team to ask.",
       inputSchema: { id: idArg },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       ...writeMeta,
