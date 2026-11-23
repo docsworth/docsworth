@@ -196,6 +196,12 @@ describe("list", () => {
     expect(r.pages?.map((p) => p.id)).toEqual(["adr-0001", "adr-0002", "adr-0003"]);
   });
 
+  it("uses `type` when given both `type` and `path`, as its description says", async () => {
+    const r = await service().list({ path: "runbooks", type: "adr" });
+    expect(r).not.toHaveProperty("path");
+    expect(r.pages?.map((p) => p.id)).toEqual(["adr-0001", "adr-0002", "adr-0003"]);
+  });
+
   it("refuses paths outside the knowledge root and unknown/hidden directories", async () => {
     await expect(service().list({ path: "../.." })).rejects.toMatchObject({ code: "invalid" });
     await expect(service().list({ path: "security" })).rejects.toMatchObject({ code: "not_found" });
