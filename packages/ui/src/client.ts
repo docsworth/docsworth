@@ -82,7 +82,7 @@ export class DocsworthClient {
         jsonrpc: "2.0",
         id: ++this.nextId,
         method: "initialize",
-        params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: this.opts.name ?? "docsworth-web", version: "0.4.0" } },
+        params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: this.opts.name ?? "docsworth-web", version: "0.5.0" } },
       });
       if (!res.ok) throw await DocsworthClient.failure(res);
       const session = res.headers.get("mcp-session-id");

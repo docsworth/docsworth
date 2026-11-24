@@ -14,7 +14,7 @@ import { resolve } from "node:path";
 // owns the bare `docsworth`: never fall back to either. test/package-name.test.ts keeps it
 // equal to PACKAGE_NAME@PACKAGE_VERSION in src/core/version.ts, and the release guard
 // refuses a release where it isn't.
-const PLUGIN_PACKAGE = "@docsworth/cli@0.4.0";
+const PLUGIN_PACKAGE = "@docsworth/cli@0.5.0";
 
 // The repo reaches the server in the environment, never on the command line, which Windows
 // runs through cmd.exe: a path would split at a space there, and what follows an `&` would
