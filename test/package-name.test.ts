@@ -55,14 +55,14 @@ describe("only our package is ever fetched", () => {
   });
 
   it("is @docsworth/cli, in the range of this version", () => {
-    expect(PUBLISHED_PACKAGE).toBe("@docsworth/cli@^0.4");
+    expect(PUBLISHED_PACKAGE).toBe("@docsworth/cli@^0.5");
   });
 
   it("docsworth init --ci runs the published package unless told another", () => {
     const root = fresh();
     initRepo(root, { org: "acme", team: "platform", ci: true, now: NOW });
     const wf = readFileSync(join(root, ".github/workflows/knowledge.yml"), "utf8");
-    expect(wf.match(/npx -y \S+/g)).toEqual(Array(1).fill('npx -y "@docsworth/cli@^0.4"'));
+    expect(wf.match(/npx -y \S+/g)).toEqual(Array(1).fill('npx -y "@docsworth/cli@^0.5"'));
   });
 
   it("docsworth init --ci refuses a package we don't own, before writing anything", () => {
